@@ -1,0 +1,6 @@
+(type:counter name:A value:1)
+(type:brick name:A size:10 position:heap)
+(type:brick name:E size:15 position:hand)
+(type:brick name:B size:20 position:heap)
+(type:brick name:C size:30 position:heap)
+(type:brick name:D size:20 position:heap)

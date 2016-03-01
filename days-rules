@@ -1,0 +1,4 @@
+if (type:wantdays year:n) then (remove 1) (add year mod4:[n%4] mod100:[n%100] mod400:[n%400])
+if (year:{%400==0}) then (remove 1) (add type:hasdays days:366)
+if (year:{%100==0}) (year:{%400!=0}) then (remove 1) (add type:hasdays days:366)
+if (year:{%4==0}) then (remove 1) (add type:hasdays days:365)
