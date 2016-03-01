@@ -1,2 +1,2 @@
-if (type:brick position:heap name:n size:s) (~ type:brick position:heap size:{>s}) (~ type:brick position:hand) then (modify:1 position:hand)
+if (type:brick position:heap name:n size:s) (~ type:brick position:heap size:{>s}) (~ type:brick position:hand) then (action:modify on:1 position:hand)
 if (type:brick position:hand) (type:counter value:i) then (modify:1 position:i) (modify:2 value:[i+1])
