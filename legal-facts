@@ -1,0 +1,4 @@
+(type:person name:andi age:16 status:legal)
+(type:person name:dhika age:19 status:legal)
+(car owner:andi)
+(car owner:dhika)
