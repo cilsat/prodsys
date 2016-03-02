@@ -10,6 +10,9 @@ from itertools import chain
 conditional = ['if', 'then']
 action = ['add', 'remove', 'modify']
 operators = '<>!=&|%'
+conjuctions = ['<', '>', '<=', '>=', '!=', '==']
+
+agenda = []
 
 def parse_rules(_rules):
     # antecedents/consequences to be parsed during pattern matching/action
@@ -100,19 +103,19 @@ this basically works on a multi-level truth table / tree with:
     - attributes
 working memory elements are matched 
 """
-def match(_wm, _antecedents, _consequences, debug=True):
+def match(_wm, _antecedents, debug=True):
 
-    # store all wme matches
-    master_truth_table = []    
     # match rules in sequence
+    matches = []
+    variables = []
     for n_rule in range(len(_antecedents)):
         antecedent = _antecedents[n_rule]
-        consequence = _consequences[n_rule]
 
         if debug:
             print('')
             print('RULE ' + str(n_rule))
-        rule_truth_table = []
+        rule_vars = {}
+        rule_table = []
 
         # persist WME variables and WME truth tables across clauses
         wmes_vars = [{}]*len(_wm.index)
@@ -126,44 +129,79 @@ def match(_wm, _antecedents, _consequences, debug=True):
         for n_clause in range(len(antecedent.index)):
             clause = antecedent.iloc[n_clause]
 
+            # if we've changed clause type, resolve the current WME truth table
+            if wmes_truth_table and cur_type != clause['type']:
+                wmes_truth_table = np.vstack(wmes_truth_table)
+                matched_wmes = np.all(wmes_truth_table.T, axis=-1).reshape(-1)
+                rule_table.append(dict(zip(wmes.index, matched_wmes)))
+                try:
+                    rule_vars.update(dict(zip(wmes.index, wmes_vars)))
+                except:
+                    print("something went terribly wrong and you probably can't fix it")
+
+                if debug:
+                    print('Clause type change triggered')
+                    #print('WMEs truth table:')
+                    #print(wmes_truth_table)
+
+                wmes_truth_table = []
+                cur_type = clause['type']
+
             # get only wmes that match clause type
             wmes = _wm.loc[_wm['type'] == clause['type']]
             clause_drop = clause.drop({'negation', 'type'}).dropna()
-
-            # if we've changed clause type, resolve the current WME truth table
-            if cur_type != clause['type']:
-                wmes_truth_table = np.vstack(wmes_truth_table)
-                rule_truth_table.append(np.all(wmes_truth_table.T, axis=-1))
-                if debug:
-                    print(wmes_truth_table)
-                    print(rule_truth_table)
-                wmes_truth_table = []
-                cur_type = clause['type']
+            #wmes = _wm
+            #clause_drop = clause.drop({'negation'}).dropna()
 
             if debug:
                 print('')
                 print('CLAUSE ' + str(n_clause))
-                print('Negation: ' + str(clause['negation']))
-                print(clause_drop)
+                #print('Negation: ' + str(clause['negation']))
+                #print(clause_drop)
 
             if not wmes.empty:
                 wmes_vars, temp_wmes_truth_table = clause_match(clause_drop, wmes, wmes_vars, debug=debug)
                 # check for negation and append
-                wmes_truth_table.append(clause['negation'] != temp_wmes_truth_table)
+                if temp_wmes_truth_table:
+                    wmes_truth_table.append(clause['negation'] != temp_wmes_truth_table)
+                    if debug:
+                        print('End of clause round WME: '),
+                        print(wmes_truth_table)
+                        print('')
 
-        wmes_truth_table = np.vstack(wmes_truth_table)
-        rule_truth_table.append(np.all(wmes_truth_table.T, axis=-1))
+        if wmes_truth_table:
+            wmes_truth_table = np.vstack(wmes_truth_table)
+            matched_wmes = np.all(wmes_truth_table.T, axis=-1).reshape(-1)
+            rule_table.append(dict(zip(wmes.index, matched_wmes)))
+            try:
+                rule_vars.update(dict(zip(wmes.index, wmes_vars)))
+            except:
+                print("something went terribly wrong and you probably can't fix it")
         if debug:
-            print(wmes_truth_table)
-            print(rule_truth_table)
+            #print('WMEs truth table:')
+            #print(wmes_truth_table)
+            print(rule_vars)
 
-        master_truth_table.append(rule_truth_table)
+        # SUPER HACKY
+        per_rule = []
+        var_rule = []
+        # resolve type groupings first
+        if np.all([np.any(r.values()) for r in rule_table]):
+            for r in rule_table:
+                for key, val in r.iteritems():
+                    if val:
+                        per_rule.append(key)
+                        if rule_vars[key]:
+                            var_rule.append(rule_vars[key])
+        matches.append(per_rule)
+        variables.extend(var_rule)
 
     if debug:
         print('')
-        print(master_truth_table)
+        print(matches)
+        print(variables)
 
-    return master_truth_table
+    return matches, variables
 
 def clause_match(_clause, _wmes, _wmes_vars, debug=True):
 
@@ -180,9 +218,6 @@ def clause_match(_clause, _wmes, _wmes_vars, debug=True):
             value = str(_clause[attribute])
             # expression
             if value.startswith('{'):
-                if not wme_vars:
-                    print("expression: no variables set")
-                    break
                 args = value.translate(None, '{}')
                 args = args.replace('&', ' and ').replace('|', ' or ')
                 vars = re.findall(r'[a-z]+', args)
@@ -198,14 +233,17 @@ def clause_match(_clause, _wmes, _wmes_vars, debug=True):
                         clause_truth_table.append(np.NaN)
                 # starts with an operator: evaluate for entire WM
                 else:
+                    col = [c for c in _clause.index if c != attribute]
+                    trunc = _wmes.iloc[np.any((_wmes[col] == _clause), axis=-1)]
+                    
+                    cmd = "trunc['" + attribute + "'].values.astype(float)"
                     try:
-                        cmd = "_wmes['" + attribute + "'].values.astype(float)"
                         for var in vars:
                             args = args.replace(var, wme_vars[var])
                         result = eval(cmd + args)
                         clause_truth_table.append(np.any(result))
                     except:
-                        print("expression op in front: variable not found")
+                        print("expression op in front: something went wrong")
                         clause_truth_table.append(np.NaN)
 
             # evaluation
@@ -224,6 +262,16 @@ def clause_match(_clause, _wmes, _wmes_vars, debug=True):
                 except:
                     print("expression: variable not found")
 
+            #conjunction
+            elif value[0] in string.punctuation:
+                print('conjuction triggered')
+                cmd = "_wmes['" + attribute + "'].values.astype(float)"
+                try:
+                    result = eval(cmd + value)
+                except:
+                    print("conjuction error: something went wrong")
+                clause_truth_table.append(np.any(result))
+
             # variable: always evaluates true and initializes the cur_eval dict
             elif len(value) == 1 and value.islower():
                 wme_vars[value] = wme[attribute]
@@ -236,15 +284,109 @@ def clause_match(_clause, _wmes, _wmes_vars, debug=True):
                 else:
                     clause_truth_table.append(False)
 
-        temp_wmes_truth_table.append(np.all(clause_truth_table))
+        if clause_truth_table:
+            temp_wmes_truth_table.append(np.all(clause_truth_table))
         if debug:
             print('WME ' + str(n_wme))
-            print(list(_clause.keys()))
-            print(clause_truth_table)
+            print(dict(zip(list(_clause.keys()), clause_truth_table)))
+            print(temp_wmes_truth_table)
+            print(wme_vars)
+            
         temp_wmes_vars.append(wme_vars)
 
     return temp_wmes_vars, temp_wmes_truth_table
 
-def resolve_conflicts(_agenda, policy='dfs'):
-    pass
+def resolve_conflicts(_match, policy='order'):
+    if policy == 'order':
+        n = 0
+        try:
+            while not _match[n] and n <= len(_match): n+=1
+            return n, _match[n]
+        except:
+            return []
+
+def apply_action(_n_rule, _n_wmes, _rule_vars, _wm, _antecedents, _consequences):
+    # get variables from antecedents
+    antecedent = _antecedents[_n_rule]
+    consequence = _consequences[_n_rule]
+
+    for n_cons_c in range(len(consequence.index)):
+        cons_clause = consequence.iloc[n_cons_c]
+        action = cons_clause['action']        
+
+        if action == 'remove':
+            _wm = _wm.drop(int(cons_clause['on']) - 1)
+        elif action == 'add':
+            values = cons_clause.drop({'action', 'on'})
+            try:
+                rule_vars = _rule_vars[_n_rule]
+            except:
+                rule_vars = {}
+            new_values = parse_values(values, rule_vars)
+            df = dict(zip(values.keys(), new_values))
+            _wm = _wm.append(df, ignore_index=True)
+        elif action == 'modify':
+            wme_id = _n_wmes[int(cons_clause['on']) - 1]
+            values = cons_clause.drop({'action', 'on'})
+            try:
+                rule_vars = _rule_vars[_n_rule]
+            except:
+                rule_vars = {}
+            new_values = parse_values(values, rule_vars)
+            for n_key in range(len(values.keys())):
+                _wm.iloc[wme_id][values.keys()[n_key]] = new_values[n_key]
+
+    new_wm = _wm.copy()
+    _wm = []
+
+    return new_wm
+
+def parse_values(_values, _vars):
+    out_values = []
+    for value in _values:
+        value = str(value)
+        # evaluation
+        if value.startswith('['):
+            args = value.translate(None, '[]')
+            args = args.replace('&', ' and ').replace('|', ' or ')
+            vars = re.findall(r'[a-z]+', args)
+            for var in vars:
+                try:
+                    args = args.replace(var, _vars[var])
+                except:
+                    print('evaluation error: no variables found')
+            result = eval(args)
+            out_values.append(str(result))
+
+        # variables
+        elif len(value) == 1 and value.islower():
+            out_values.append(str(_vars[value]))
+
+        # atom
+        else:
+            out_values.append(str(value))
+    
+    return out_values
+
+def test_loop(rule_file='/home/cilsat/dev/rpp/prodsys/days-rules', fact_file='/home/cilsat/dev/rpp/prodsys/days-memory'):
+    a, c = parse_rules(open(rule_file).read())
+    wm = parse_facts(open(fact_file).read())
+    m, v = match(wm, a, debug=False)
+    #m, v = match(wm, a, debug=True)
+    n = 1
+    chosen = resolve_conflicts(m)
+    while chosen:
+        temp_wm = apply_action(chosen[0], chosen[1], v, wm, a, c)
+        print('Iteration ' + str(n))
+        print(temp_wm)
+        print('')
+        wm = []
+        wm = temp_wm
+        temp_wm = []
+        #m, v = match(wm, a, debug=True)
+        m, v = match(wm, a, debug=False)
+        chosen = resolve_conflicts(m)
+        n+=1
+
+    print('Program terminated')
 
