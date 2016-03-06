@@ -6,6 +6,8 @@ import pandas as pd
 import re
 import string
 
+from collections import OrderedDict
+
 # reserved keywords and characters
 conditional = ['if', 'then']
 action = ['add', 'remove', 'modify']
@@ -20,12 +22,10 @@ class Rete():
         if rules and facts:
             self.init_rete(rules)
             self.init_wm(facts)
-            self.first_run()
-
             if self.dbg:
                 print(self.nodes_alpha)
                 print(self.wm)
-                print(self.alpha_memory)
+            self.matched = self.first_run()
 
     # generates the required Rete structures from plaintext
     def init_rete(self, _rules):
@@ -33,6 +33,7 @@ class Rete():
         conditions = []
         actions = []
 
+        cols = []
         # map each rule to its constituent conditions and actions, respectively
         rule_condition_map = []
         rule_action_map = []
@@ -53,7 +54,9 @@ class Rete():
 
             # convert plaintext conditions into dictionaries
             for cond in conditions_raw:
-                conditions.append(self.str_to_dict(cond, 'condition'))
+                attvals, keys = self.str_to_dict(cond, 'condition')
+                conditions.append(attvals)
+                [cols.append(key) for key in keys if key not in cols]
                 # TODO
                 temp_cond_map.append(n_cond)
                 n_cond += 1
@@ -66,7 +69,8 @@ class Rete():
             rule_condition_map.append(temp_cond_map)
 
         # alpha nodes: the set of rule conditions
-        self.nodes_alpha = pd.DataFrame(conditions)
+        self.cols = cols
+        self.nodes_alpha = pd.DataFrame(conditions, columns=cols)
         self.conditions = conditions
         # rule map: maps rules to their conditions 
         self.map_alpha = rule_condition_map
@@ -74,22 +78,26 @@ class Rete():
     # initializes WM from a joint table of all WMEs from plaintext facts
     def init_wm(self, _facts):
         wmes = []
+        cols = []
         for wme in filter(None, _facts.split('\n')):
-            wme_dict = self.str_to_dict(wme, 'wme')
+            wme_dict, keys = self.str_to_dict(wme, 'condition')
+            [cols.append(key) for key in keys if key not in cols]
             wmes.append(wme_dict)
-        self.wm = pd.DataFrame(wmes)
+        self.wm = pd.DataFrame(wmes, columns=cols)
 
     def str_to_dict(self, _str, _sender="unspecified"):
         # attribut-value tuple
-        attval = {}
+        attval = OrderedDict()
+        keys = []
         # remove any punctuation from string
         temp_str = _str.translate(None, '()')
         # for each attribute-value tuple split on ':' and make dict
         for tup in temp_str.split():
             att, val = tup.split(':')
+            if att not in keys: keys.append(att)
             try: attval[att] = val
             except: print("Syntax error in " + _sender + ": " + tup)
-        return attval
+        return attval, keys
 
     def first_run(self):
         try:
@@ -111,15 +119,18 @@ class Rete():
 
         self.alpha_memory = am
         self.beta_memory = []
-
+        
+        rules_matched = []
         for rule in self.map_alpha:
             bm = self.alpha_memory[rule[0]]
             rule_matches = []
             for n in range(len(rule)-1):
-                print(bm)
-                bm = self.beta_match(bm, self.alpha_memory[rule[n+1]])
+                bm = self.beta_match(bm, rule[n+1])
+                if bm.empty: break
                 rule_matches.append(bm)
-            print(rule_matches)
+            rules_matched.append(bm)
+            self.beta_memory.append(rule_matches)
+        return rules_matched
 
     def alpha_match(self, _cond, _wm):
         cond = _cond.drop({'type', 'negation'})
@@ -129,7 +140,7 @@ class Rete():
         alpha_vars = []
         
         # type matching first
-        wm_type = _wm.loc[_wm['type'] == _cond['type']].dropna(axis=1)
+        wm_type = _wm.loc[_wm['type'] == _cond['type']]
         for wme in [wm_type.loc[n] for n in wm_type.index]:
             local_vars = {}
             tally_matches = []
@@ -156,27 +167,34 @@ class Rete():
 
     def beta_match(self, _mem1, _mem2):
         am1 = _mem1
-        am2 = _mem2
+        am2 = self.alpha_memory[_mem2]
 
-        # perform inner join on indexes of input memories
-        bm = pd.concat([am1, am2], join='inner', axis=1)
+        try:
+            bm = pd.merge(am1, am2, left_index=True, right_index=True)
+        except:
+            print('Too many variables somewhere: game over')
+            bm = pd.DataFrame()
 
         # check for unhandled expressions from previous round of matching
-        if '{exp}' in bm.columns:            
-            # assumes that types already match!
-            cond = self.nodes_alpha.loc[_cond1].drop({'type', 'negation'}).dropna(axis=1)
-            neg = eval(_cond1['negation'])
-            # take index memory from current node
-            wm_subset = self.wm.loc[am1.index]
-            # take column memory from other node
-            other_var = am2.to_dict('records')
-            # test to see if current alpha nodes' memory aligns with other nodes' dict
-            #if len(wm_subset) == len(other_var):
+        # TODO add safeguards for [eval] too
+        unhandled = [var for var in bm.columns if len(var) > 1]
+        print(unhandled)
+        if unhandled:
+            for key in unhandled:
+                for mem in [bm.loc[n] for n in bm.index]:
+                    cond = self.nodes_alpha.loc[_mem2]
+                    neg = eval(cond['negation'])
+                    cond = cond.drop({'type', 'negation'})
+                    for tup in cond.iteritems():
+                        print(self.eval_attribute(tup, self.wm.loc[mem.name], neg, mem.to_dict()))
 
         return bm
 
     def eval_attribute(self, _cond, _fact, _neg=False, _var={}):
         key, val = _cond
+        if self.dbg:
+            print(key in _fact.index)
+        print(key, val)
         # expression
         if val.startswith('{'):
             args = val.translate(None, '{}')
@@ -184,7 +202,7 @@ class Rete():
             free_vars = re.findall(r'[a-z]+', args)
             # not enough information!
             if free_vars not in _var.keys():
-                _var['{exp}'] = args
+                _var[key] = '{'+args+'}'
                 match = not _neg
             # can be evaluated now
             else:
@@ -193,7 +211,10 @@ class Rete():
                 match = eval(_fact[key] + args) if args[0] in operators else eval(args)
         # variable
         elif len(val) == 1 and val.islower():
-            _var[val] = _fact[key]
+            try:
+                _var[val] = _fact[key]
+            except:
+                print('Key warning: fact has no such value')
             match = True
         # atom
         else:
