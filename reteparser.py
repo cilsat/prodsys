@@ -1,9 +1,10 @@
 #!/usr/bin/pythonn
 
+import numpy as np
 import pandas as pd
+
 import re
 import string
-import numpy as np
 from itertools import chain
 
 # names reserved for use by the system
@@ -12,90 +13,138 @@ action = ['add', 'remove', 'modify']
 operators = '<>!=&|%'
 conjuctions = ['<', '>', '<=', '>=', '!=', '==']
 
-agenda = []
+class Rete():
 
-def parse_rules(_rules):
-    # antecedents/consequences to be parsed during pattern matching/action
-    antecedents = []
-    consequences = []
+    def __init__(self, rules=None, facts=None):
+        # build if rules and facts are specified
+        if rules and facts:
+            self.init_rete(rules)
+            self.init_wm(facts)
+            self.init_alpha_mem()
 
-    # for each production rule
-    for pr in [r for r in _rules.split('\n') if r]:
-        # split into antecedent and consequence, assumed to be separated by 'then' keyword
-        ante, cons = pr.split(conditional[1])
-        # separate antecedent/consequence into their separate clauses by brackets
-        ante_clauses = re.findall(r'\((.*?)\)', ante)
-        cons_clauses = re.findall(r'\((.*?)\)', cons)
+    # generates the required Rete structures from plaintext
+    def init_rete(self, _rules):
+        # all conditions/actions to be parsed during pattern matching/action
+        conditions = []
+        actions = []
 
-        # a first run to collect our types, attributes, and specs for WM
-        # atecedents and consequences are collected but not parsed
-        antecedent = []
-        for clause in ante_clauses:
-            atts = []
-            specs = []
-
-            # deal with negation
-            negation = True if clause.startswith('~') else False
-            clause = clause.replace('~ ', '')
-            atts.append('negation')
-            specs.append(negation)
-
-            # parse attributes/specifications by clause
-            for att_spec in clause.split():
-                att, spec = att_spec.split(':')
-                atts.append(att)
-                specs.append(spec)
-
-            antecedent.append(dict(zip(atts, specs)))
-
-        antecedents.append(antecedent)
-
-        consequence = []
-        for clause in cons_clauses:
-            # parse attributes/specifications by clause
-            atts = []
-            specs = []
-            for att_spec in clause.split():
-                att, spec = att_spec.split(':')
-                atts.append(att)
-                specs.append(spec)
-
-            consequence.append(dict(zip(atts, specs)))
-
-        consequences.append(consequence)
-
-    # build antecedents table for each rule
-    rule_antes = pd.DataFrame()
-    for n_rule in range(len(antecedents)):
-        rule_df = pd.DataFrame([clause for clause in antecedents[n_rule]], index=range(len(rule)))
-        rule_antes.join(rule_df)
-    print(rule_antes)
-
-    # build antecedents table for each rule
-    rule_consequences = pd.DataFrame()
-    for rule in consequences:
-        rule_df = pd.DataFrame([clause for clause in rule], index=range(len(rule)))
-        rule_consequences.join(rule_df)
-
-    return rule_antecedents, rule_consequences
-
-def parse_facts(_facts):
-
-    wm = pd.DataFrame()
-    for wme in filter(None, _facts.split('\n')):
-        wme_vals = {}
-        wme = wme.translate(None, '()')
-
-        for att_val in wme.split():
-            att, val = att_val.split(':')
+        # map each rule to its constituent conditions and actions, respectively
+        rule_condition_map = []
+        rule_action_map = []
+        # for each production rule
+        n_cond = 0
+        for pr in [r for r in _rules.split('\n') if r]:
             try:
-                wme_vals[att] = [val]
+                # split into LHS and RHS, separated by keyword
+                lhs_raw, rhs_raw = pr.split(conditional[1])
+                # split into conditions and actions, separated by brackets
+                conditions_raw = re.findall(r'\((.*?)\)', lhs_raw)
+                actions_raw = re.findall(r'\((.*?)\)', rhs_raw)
             except:
-                print(att_val)
+                print("Syntax error in rule definition")
 
-        wm = wm.append(pd.DataFrame(wme_vals), ignore_index=True)
+            # TODO modify to make less fugly and wrong
+            temp_cond_map = []
 
-    return wm
+            # convert plaintext conditions into dictionaries
+            for cond in conditions_raw:
+                conditions.append(self.str_to_dict(cond, 'condition'))
+                # TODO
+                temp_cond_map.append(n_cond)
+                n_cond += 1
+
+            # convert plaintext actions into dictionaries
+            for act in actions_raw:
+                actions.append(self.str_to_dict(act, 'action'))
+
+            # TODO
+            rule_condition_map.append(temp_cond_map)
+
+        # alpha nodes: the set of rule conditions
+        self.alpha_nodes = conditions
+        # rule map: maps rules to their conditions 
+        self.rule_map = rule_condition_map
+
+    # initializes WM from a joint table of all WMEs from plaintext facts
+    def init_wm(self, _facts):
+        wmes = []
+        for wme in filter(None, _facts.split('\n')):
+            wme_dict = self.str_to_dict(wme, 'wme')
+            wmes.append(wme_dict)
+        self.wm = pd.DataFrame(wmes)
+
+    def str_to_dict(self, _str, _sender="unspecified"):
+        # attribut-value tuple
+        attval = {}
+        # remove any punctuation from string
+        temp_str = _str.translate(None, '()')
+        # for each attribute-value tuple split on ':' and make dict
+        for tup in temp_str.split():
+            att, val = tup.split(':')
+            try: attval[att] = val
+            except: print("Syntax error in " + _sender + ": " + tup)
+        return attval
+
+    def init_alpha_mem(self):
+        try:
+            an = self.alpha_nodes
+            wm = [self.wm.ix[n].dropna().to_dict() for n in range(len(self.wm.index))]
+        except:
+            print("Error: Rete uninitialized")
+
+        # initialize memory for each alpha node
+        am = [pd.DataFrame()]*len(an)
+        # for each node and for each wme
+        n=0
+        for i, cond in enumerate(an):
+            for j, wme in enumerate(wm):
+                print(n),
+                print(cond),
+                print(wme),
+                self.match(wme, cond.copy(), am[i], j)
+                n+=1
+
+        self.alpha_memory = am
+
+    # checks if a given fact matches a given pattern/condition 
+    def match(self, _wme, _cond, _mem, _idx):
+        # match type first and negation last
+        # TODO make this less hacky
+        if _cond['type'] == _wme['type']:
+            _cond.pop('type')
+            negation = eval(_cond.pop('negation'))
+
+            tally_matches = []
+            local_vars = {}
+            for key, val in _cond.iteritems():
+                # expression
+                if val.startswith('{'):
+                    val = val.translate(None, '{}')
+                    for var_key, var_val in local_vars:
+                        val.replace(var_key, var_val)
+                    result = eval(_wme[key] + val) if val[0] in operators else eval(val)
+                    val_match = True if np.all(result) else False
+                    tally_matches.append(val_match)
+                # evaluation
+                elif val.startswith('['):
+                    pass
+                # variable
+                elif len(val) == 1 and val.islower():
+                    local_vars[val] = _wme[key]
+                    tally_matches.append(True)
+                # atom
+                else:
+                    val_match = True if val == _wme[key] else False
+                    tally_matches.append(val_match)
+            print(local_vars)
+                
+            ismatch = np.all(tally_matches)
+            # handle negation of condition
+            ismatch = (negation != ismatch)
+
+            if ismatch:
+                for var_key, var_val in local_vars.copy().iteritems():
+                    _mem.loc[_idx, var_key] = var_val 
 
 """
 this basically works on a multi-level truth table / tree with:
