@@ -1,0 +1,4 @@
+(type:bird name:ostrich weight:110)
+(type:bird name:hummingbird weight:1)
+(type:bird name:penguin weight:20)
+(type:bird name:penguin weight:180)
