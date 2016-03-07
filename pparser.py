@@ -66,7 +66,7 @@ def parse_rules(_rules):
 
     # build antecedents table for each rule
     rule_antes = pd.DataFrame()
-    for n_rule in range(len(antecedents)):
+    for n_rule, rule in enumerate(antecedents):
         rule_df = pd.DataFrame([clause for clause in antecedents[n_rule]], index=range(len(rule)))
         rule_antes.join(rule_df)
     print(rule_antes)
@@ -77,7 +77,7 @@ def parse_rules(_rules):
         rule_df = pd.DataFrame([clause for clause in rule], index=range(len(rule)))
         rule_consequences.join(rule_df)
 
-    return rule_antecedents, rule_consequences
+    return rule_antes, rule_consequences
 
 def parse_facts(_facts):
 

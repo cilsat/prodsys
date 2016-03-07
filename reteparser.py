@@ -27,27 +27,24 @@ class Rete():
                 print(self.nodes_alpha)
                 print(self.wm)
 
+            self.first_run()
+
             self.threshold = 10
             self.saved_memory = [{'n_rule':'None', 'rule':pd.DataFrame()}]*self.threshold
 
             self.refractor_table = [[]]*len(self.map_alpha)
 
-            """
-            m = self.matched
+            m = self.matches
             chosen = self.resolve_conflicts(m)
             while chosen:
-                temp_wm = self.apply_action(chosen[0], chosen[1], v, wm, a, c)
-                print('Iteration ' + str(n))
-                print(temp_wm)
-                print('')
-                wms.append(temp_wm)
-                wm = []
-                wm = temp_wm
-                temp_wm = []
-                #m, v = match(wm, a, debug=True)
-                m, v = match(wm, a, debug=debug)
-                chosen = resolve_conflicts(m)
-            """
+                self.apply_action(chosen)
+                self.first_run()
+                print(self.wm.dropna(axis=1))
+                try:
+                    chosen = self.resolve_conflicts(self.matches)
+                except:
+                    print('End of process')
+                    break
 
 
     # generates the required Rete structures from plaintext
@@ -56,7 +53,8 @@ class Rete():
         conditions = []
         actions = []
 
-        cols = []
+        cond_cols = []
+        act_cols = []
         # map each rule to its constituent conditions and actions, respectively
         rule_condition_map = []
         rule_action_map = []
@@ -79,22 +77,28 @@ class Rete():
             for cond in conditions_raw:
                 attvals, keys = self.str_to_dict(cond, 'condition')
                 conditions.append(attvals)
-                [cols.append(key) for key in keys if key not in cols]
+                [cond_cols.append(key) for key in keys if key not in cond_cols]
                 # TODO
                 temp_cond_map.append(n_cond)
                 n_cond += 1
 
+            temp_act_map = []
             # convert plaintext actions into dictionaries
             for act in actions_raw:
-                actions.append(self.str_to_dict(act, 'action'))
+                attvals, keys = self.str_to_dict(act, 'action')
+                [act_cols.append(key) for key in keys if key not in act_cols]
+                temp_act_map.append(attvals)
+
+            actions.append(pd.DataFrame(temp_act_map, columns=act_cols))
 
             # TODO
             rule_condition_map.append(temp_cond_map)
 
         # alpha nodes: the set of rule conditions
-        self.cols = cols
-        self.nodes_alpha = pd.DataFrame(conditions, columns=cols)
+        self.cond_cols = cond_cols
+        self.nodes_alpha = pd.DataFrame(conditions, columns=cond_cols)
         self.conditions = conditions
+        self.actions = actions
         # rule map: maps rules to their conditions 
         self.map_alpha = rule_condition_map
 
@@ -153,18 +157,16 @@ class Rete():
             rules_matched.append(bm)
             self.beta_memory.append(rule_matches)
 
-        print(rules_matched)
+        self.rules_memory = rules_matched
 
-        matched = []
-        for n, rule in enumerate(rules_matched):
-            print(rule)
+        matches = []
+        for rule in rules_matched:
             if rule.isnull().values.any():
-                matched.append(rule.to_dict())
+                matches.append([list(rule.index)])
             else:
-                matched.append([self.wm.loc[n].to_dict() for n in rule.index])
+                matches.append([n for n in rule.index])
 
-        print(matched)
-        self.matched = matched
+        self.matches = matches
 
     def alpha_match(self, _cond, _wm):
         cond = _cond.drop({'type', 'negation'})
@@ -203,14 +205,13 @@ class Rete():
         am1 = _mem1
         am2 = self.alpha_memory[_mem2]
 
-        try:
-            if len(am1.columns) == 0:
-                bm = pd.concat([am2, am1], join='outer', axis=1)
-            else:
+        if len(am1.columns) == 0:
+            bm = pd.concat([am2, am1], join='outer', axis=1)
+        else:
+            try:
                 bm = pd.merge(am1, am2, how='inner')
-        except:
-            print('Too many variables somewhere: game over')
-            bm = pd.DataFrame()
+            except:
+                bm = pd.concat([am1, am2], join='inner', axis=1)
 
         # check for unhandled expressions from previous round of matching
         # TODO add safeguards for [eval] and make less fugly
@@ -220,7 +221,6 @@ class Rete():
         except:
             print("Warning: unpredictable behaviour ahead")
         if unhandled:
-            print(bm)
             cond = self.nodes_alpha.loc[_mem2]
             if self.dbg:
                 print(unhandled)
@@ -250,17 +250,19 @@ class Rete():
         return bm
 
     def resolve_conflicts(self, _matches, _policy='order'):
+
+        all_rules = []
+        for n_rule, rule in enumerate( _matches):
+            for wme in rule:
+                all_rules.append({'rule':n_rule, 'wme':wme})
+
         if _policy == 'order':
             # always choose the first
-            for n in range(len(_matches)):
-                if not len(_matches[n].index) == 0:
-                    chosen = _matches[n]
-                    n_chosen = n
-                    break
+            chosen = all_rules[0]
 
             loop_test = []
             for n in range(self.threshold):
-                if self.saved_memory[-(n+1)]['n_rule'] == n_chosen:
+                if self.saved_memory[-(n+1)] == chosen:
                     loop_test.append(True)
                 else:
                     loop_test.append(False)
@@ -271,14 +273,14 @@ class Rete():
 
         elif _policy == 'recent_first' or _policy == 'recent_last':
             chosen = None
-            for i, cand in enumerate(_matches):
+            for rule in all_rules:
                 for n in range(len(self.saved_memory)):
                     iterator = -(n+1) if _policy == 'recent_first' else n
-                    chos = self.saved_memory[-(n+1)]['n_rule']
+                    mem = self.saved_memory[-(n+1)]
                     # look for first rule in memory that is in matches
-                    if len(cand.index) > 0 and i == chos:
-                        chosen = cand
-                        self.saved_memory.append({'n_rule':i, 'rule':chosen})
+                    if mem == rule:
+                        chosen = rule
+                        self.saved_memory.append(rule)
                         break
             
             if chosen == None:
@@ -287,20 +289,18 @@ class Rete():
             
         # choose most specific rule: the rule for which its WMEs are the subset of the most other rules
         elif _policy == 'specific':
-            chosen_wmes = [set(rule.index) for rule in _matches if len(rule.index) > 0]
-            tally = [0]*len(chosen_wmes)
-            for i, c in enumerate(chosen_wmes):
-                for j, d in enumerate(chosen_wmes):
+            tally = [0]*len(_matches)
+            for rule in _matches:
+                for j, d in enumerate(_matches):
                     if c.issuperset(d): tally[j]+=1
             chosen = _matches[np.argmax(tally)]
 
         # forbid repetition of specific WME-Rule pairs
         elif _policy == 'refractoriness':
-            for i, rule in enumerate(_matches):
-                for j in rule.index:
-                    if j not in self.refractor_table[i]:
-                        chosen = rule
-                        self.refractor_table[i].append(j)
+            for i, rule in enumerate(all_rules):
+                if rule['rule'] not in self.refractor_table[i]:
+                    chosen = rule
+                    self.refractor_table[i].append(j)
 
         return chosen
 
@@ -325,7 +325,6 @@ class Rete():
                         del _var[key]
                     except:
                         pass
-                    print(_var)
                     for varkey, varval in _var.iteritems():
                         args = args.replace(varkey, varval)
                     if args[0] in operators:
@@ -362,40 +361,42 @@ class Rete():
 
     def apply_action(self, _chosen):
         # get variables from conditions
-        consequence = _consequences[_n_rule]
+        n_rule = _chosen['rule']
+        n_wme = _chosen['wme']
 
-        for n_cons_c in range(len(consequence.index)):
-            cons_clause = consequence.iloc[n_cons_c]
-            action = cons_clause['action']        
+        # memory from selection phase for chosen rule/wme pair
+        chosen_memory = self.rules_memory[n_rule]
+        # antecedent to the action
+        condition = self.nodes_alpha.loc[self.map_alpha[n_rule]]
+        # the action itself
+        actions = self.actions[n_rule]
+
+        for n_act in actions.index:
+            action_node = actions.loc[n_act]
+            action = action_node['action']        
+            print(action_node)
 
             if action == 'remove':
-                _wm = _wm.drop(int(cons_clause['on']) - 1)
+                # drop specified working memory element
+                self.wm = self.wm.drop(int(action_node['on']) - 1)
+
             elif action == 'add':
-                values = cons_clause.drop({'action', 'on'})
-                try:
-                    rule_vars = _rule_vars[_n_rule]
-                except:
-                    rule_vars = {}
-                new_values = parse_values(values, rule_vars)
+                values = action_node.drop({'action', 'on'})
+                new_values = self.parse_values(values, chosen_memory)
                 df = dict(zip(values.keys(), new_values))
-                _wm = _wm.append(df, ignore_index=True)
+                self.wm = self.wm.append(df, ignore_index=True)
+
             elif action == 'modify':
-                wme_id = _n_wmes[int(cons_clause['on']) - 1]
-                values = cons_clause.drop({'action', 'on'})
-                try:
-                    rule_vars = _rule_vars[_n_rule]
-                except:
-                    rule_vars = {}
-                new_values = parse_values(values, rule_vars)
+                # get values to evaluate
+                values = action_node.drop({'action', 'on'})
+                new_values = self.parse_values(values, chosen_memory)
                 for n_key in range(len(values.keys())):
-                    _wm.iloc[wme_id][values.keys()[n_key]] = new_values[n_key]
+                    print(self.wm)
+                    self.wm.iloc[n_wme][values.keys()[n_key]] = new_values[n_key]
 
-        new_wm = _wm.copy()
-        _wm = []
+        return self.wm
 
-        return new_wm
-
-    def parse_values(_values, _vars):
+    def parse_values(self, _values, _vars):
         out_values = []
         for value in _values:
             value = str(value)
@@ -405,10 +406,7 @@ class Rete():
                 args = args.replace('&', ' and ').replace('|', ' or ')
                 vars = re.findall(r'[a-z]+', args)
                 for var in vars:
-                    try:
-                        args = args.replace(var, _vars[var])
-                    except:
-                        print('evaluation error: no variables found')
+                    args = args.replace(var, _vars.loc[0].to_dict()[var])
                 result = eval(args)
                 out_values.append(str(result))
 
