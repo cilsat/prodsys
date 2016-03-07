@@ -27,7 +27,6 @@ class Rete():
                 print(self.nodes_alpha)
                 print(self.wm)
 
-            self.matched = self.first_run()
             self.threshold = 10
             self.saved_memory = [{'n_rule':'None', 'rule':pd.DataFrame()}]*self.threshold
 
@@ -153,7 +152,19 @@ class Rete():
                 rule_matches.append(bm)
             rules_matched.append(bm)
             self.beta_memory.append(rule_matches)
-        return rules_matched
+
+        print(rules_matched)
+
+        matched = []
+        for n, rule in enumerate(rules_matched):
+            print(rule)
+            if rule.isnull().values.any():
+                matched.append(rule.to_dict())
+            else:
+                matched.append([self.wm.loc[n].to_dict() for n in rule.index])
+
+        print(matched)
+        self.matched = matched
 
     def alpha_match(self, _cond, _wm):
         cond = _cond.drop({'type', 'negation'})
