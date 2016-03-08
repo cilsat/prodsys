@@ -36,16 +36,20 @@ class Rete():
 
             m = self.matches
             chosen = self.resolve_conflicts(m)
+            print(chosen)
+            #self.apply_action(chosen)
+            #self.first_run()
+            """
             while chosen:
                 self.apply_action(chosen)
                 self.first_run()
-                print(self.wm.dropna(axis=1))
+                print(self.wm)
                 try:
                     chosen = self.resolve_conflicts(self.matches)
                 except:
                     print('End of process')
                     break
-
+            """
 
     # generates the required Rete structures from plaintext
     def init_rete(self, _rules):
@@ -374,7 +378,6 @@ class Rete():
         for n_act in actions.index:
             action_node = actions.loc[n_act]
             action = action_node['action']        
-            print(action_node)
 
             if action == 'remove':
                 # drop specified working memory element
@@ -387,18 +390,19 @@ class Rete():
                 self.wm = self.wm.append(df, ignore_index=True)
 
             elif action == 'modify':
-                # get values to evaluate
-                values = action_node.drop({'action', 'on'})
+                values = action_node.drop({'action', 'on'}).to_dict()
                 new_values = self.parse_values(values, chosen_memory)
                 for n_key in range(len(values.keys())):
-                    print(self.wm)
+                    #print(values.keys()[n_key]),
+                    #print(new_values[n_key])
                     self.wm.iloc[n_wme][values.keys()[n_key]] = new_values[n_key]
 
         return self.wm
 
     def parse_values(self, _values, _vars):
         out_values = []
-        for value in _values:
+        print(_values)
+        for key, value in _values.iteritems():
             value = str(value)
             # evaluation
             if value.startswith('['):
