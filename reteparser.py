@@ -27,29 +27,35 @@ class Rete():
                 print(self.nodes_alpha)
                 print(self.wm)
 
-            self.first_run()
+            self.match()
+            print(self.wm)
 
             self.threshold = 10
             self.saved_memory = [{'n_rule':'None', 'rule':pd.DataFrame()}]*self.threshold
 
-            self.refractor_table = [[]]*len(self.map_alpha)
+            if policy == 'refractor':
+                self.refractor_table = [[] for _ in range(len(self.map_alpha))]
 
             m = self.matches
-            chosen = self.resolve_conflicts(m)
-            print(chosen)
-            #self.apply_action(chosen)
-            #self.first_run()
-            """
+            #print(self.matches)
+
+            chosen = self.resolve_conflicts(m, policy)
+            print('')
+
             while chosen:
                 self.apply_action(chosen)
-                self.first_run()
                 print(self.wm)
+
+                self.match()
+                #print(self.matches)
+                chosen = self.resolve_conflicts(self.matches, policy)
                 try:
-                    chosen = self.resolve_conflicts(self.matches)
+                    print('')
                 except:
+                    print('')
                     print('End of process')
                     break
-            """
+                
 
     # generates the required Rete structures from plaintext
     def init_rete(self, _rules):
@@ -130,7 +136,7 @@ class Rete():
             except: print("Syntax error in " + _sender + ": " + tup)
         return attval, keys
 
-    def first_run(self):
+    def match(self):
         try:
             an = self.nodes_alpha.copy()
             an = [an.loc[n].dropna() for n in an.index]
@@ -153,9 +159,9 @@ class Rete():
         
         rules_matched = []
         for rule in self.map_alpha:
-            bm = pd.DataFrame()
+            bm = self.alpha_memory[rule[0]]
             rule_matches = []
-            for n in range(len(rule)):
+            for n in range(1, len(rule)):
                 bm = self.beta_match(bm, rule[n])
                 rule_matches.append(bm)
             rules_matched.append(bm)
@@ -168,7 +174,7 @@ class Rete():
             if rule.isnull().values.any():
                 matches.append([list(rule.index)])
             else:
-                matches.append([n for n in rule.index])
+                matches.append([[n] for n in rule.index])
 
         self.matches = matches
 
@@ -210,7 +216,10 @@ class Rete():
         am2 = self.alpha_memory[_mem2]
 
         if len(am1.columns) == 0:
-            bm = pd.concat([am2, am1], join='outer', axis=1)
+            if  len(am1.index) > 0:
+                bm = am1.append(am2)
+            else:
+                bm = am1
         else:
             try:
                 bm = pd.merge(am1, am2, how='inner')
@@ -255,56 +264,115 @@ class Rete():
 
     def resolve_conflicts(self, _matches, _policy='order'):
 
+        print('')
+        print('conflict set (rule:wme)')
         all_rules = []
         for n_rule, rule in enumerate( _matches):
             for wme in rule:
                 all_rules.append({'rule':n_rule, 'wme':wme})
+                print(str(n_rule) + ':' + str(wme).translate(None, '[]') + ','),
+        print('')
+
+        chosen = None
 
         if _policy == 'order':
             # always choose the first
-            chosen = all_rules[0]
+            try:
+                chosen = all_rules[0]
+            except:
+                print('')
+                print('No rules to choose from')
 
-            loop_test = []
-            for n in range(self.threshold):
-                if self.saved_memory[-(n+1)] == chosen:
-                    loop_test.append(True)
-                else:
-                    loop_test.append(False)
-            if np.all(loop_test):
-                print("You're probably stuck in some kind of loop")
-
-            self.saved_memory.append({'n_rule':chosen, 'rule':chosen})
+        elif _policy == 'random':
+            # choose a random rule-wme pair
+            r = np.random.randint(0, len(all_rules))
+            chosen = all_rules[r]
 
         elif _policy == 'recent_first' or _policy == 'recent_last':
-            chosen = None
-            for rule in all_rules:
-                for n in range(len(self.saved_memory)):
-                    iterator = -(n+1) if _policy == 'recent_first' else n
-                    mem = self.saved_memory[-(n+1)]
+            for n in range(len(self.saved_memory)):
+                iterator = -(n+1) if _policy == 'recent_first' else n
+                mem = self.saved_memory[iterator]
+                print(mem)
+                for rule in all_rules:
                     # look for first rule in memory that is in matches
                     if mem == rule:
                         chosen = rule
-                        self.saved_memory.append(rule)
                         break
-            
-            if chosen == None:
+                else:
+                    continue
+                break
+
+            if chosen == None and _policy == 'recent_first':
                 print('No recently chosen rules, using order instead')
                 chosen = self.resolve_conflicts(_matches)
+            elif chosen == None and _policy == 'recent_last':
+                # choose a random wme that isn't in memory
+                for rule in all_rules:
+                    if rule not in self.saved_memory:
+                        chosen = rule
             
         # choose most specific rule: the rule for which its WMEs are the subset of the most other rules
         elif _policy == 'specific':
-            tally = [0]*len(_matches)
-            for rule in _matches:
-                for j, d in enumerate(_matches):
-                    if c.issuperset(d): tally[j]+=1
-            chosen = _matches[np.argmax(tally)]
+            # each rule-wme tuple has a tally
+            for tup in all_rules:
+                tup['tally'] = 0
+
+            # each rule has a tally
+            rule_tally = [0 for _ in range(len(_matches))]
+
+            # set up a nested loop of rule matches against rule-wme tuples 
+            for i in _matches:
+                c = set([ci for si in i for ci in si])
+                for nj, j in enumerate(_matches):
+                    d = set([dj for sj in j for dj in sj])
+                    # count how many rule wmes each rule-wme tuple is a subset of
+                    if c.issuperset(d): 
+                        rule_tally[nj] += 1
+                        for tup in all_rules:
+                            if tup['rule'] == nj: tup['tally'] += 1
+
+            chosen_rule = np.argmax(rule_tally)
+            # choose rule-wme tuple with the highest tally
+            chosen_wmes = [rule for rule in all_rules if rule['rule'] == chosen_rule]
+            tallies = [rule['tally'] for rule in chosen_wmes]
+            try:
+                chosen = chosen_wmes[np.argmax(tallies)]
+            except:
+                print('')
+                print("No rules to choose from")
+                chosen = None
 
         # forbid repetition of specific WME-Rule pairs
-        elif _policy == 'refractoriness':
-            for i, rule in enumerate(all_rules):
-                if rule['rule'] not in self.refractor_table[i]:
+        # we have a refractor table of each rule
+        elif _policy == 'refractor':
+            for rule in all_rules:
+                n_rule = rule['rule']
+                wme = rule['wme']
+                if wme not in self.refractor_table[n_rule]:
                     chosen = rule
-                    self.refractor_table[i].append(j)
+                    self.refractor_table[n_rule].append(wme)
+                    break
+
+            if chosen == None:
+                print('')
+                print('All rule-wme pairs used: terminating')
+                raise SystemExit
+
+        loop_test = []
+        for n in range(self.threshold):
+            if self.saved_memory[-(n+1)] == chosen:
+                loop_test.append(True)
+            else:
+                loop_test.append(False)
+        # if loop_test contains a False value then everything's OK
+        if not np.any(False == np.array(loop_test)):
+            print('')
+            print("You're probably stuck in some kind of loop: terminating")
+            raise SystemExit
+
+        self.saved_memory.append(chosen)
+        print('chosen (rule:wme)')
+        print(str(chosen['rule']) + ':' + str(chosen['wme']).translate(None, '[]'))
 
         return chosen
 
@@ -370,38 +438,45 @@ class Rete():
 
         # memory from selection phase for chosen rule/wme pair
         chosen_memory = self.rules_memory[n_rule]
-        # antecedent to the action
-        condition = self.nodes_alpha.loc[self.map_alpha[n_rule]]
+        # rule conditions: we don't have a direct mapping of rule->conditions, so we go through map_alpha
+        conditions = self.nodes_alpha.iloc[self.map_alpha[n_rule]]
         # the action itself
         actions = self.actions[n_rule]
 
+        # iterate through the actions
         for n_act in actions.index:
             action_node = actions.loc[n_act]
-            action = action_node['action']        
+            action_name = action_node['action']        
 
-            if action == 'remove':
-                # drop specified working memory element
-                self.wm = self.wm.drop(int(action_node['on']) - 1)
+            if action_name == 'remove':
+                # drop the WME specified in the 'on' attribute corresponding to the WME specified in the chosen 'wme' field 
+                self.wm = self.wm.drop(n_wme[int(action_node['on']) - 1])
 
-            elif action == 'add':
+            elif action_name == 'add':
+                # acquire values to add
                 values = action_node.drop({'action', 'on'})
                 new_values = self.parse_values(values, chosen_memory)
                 df = dict(zip(values.keys(), new_values))
-                self.wm = self.wm.append(df, ignore_index=True)
 
-            elif action == 'modify':
+                # insert new WME at the end of the table and make sure the columns are available
+                idx = list(self.wm.index)
+                target_idx = idx[-1] if len(idx) > 0 else 0
+                for key, val in df.iteritems():
+                    self.wm.loc[target_idx, key] = val
+
+            elif action_name == 'modify':
+                wme = self.wm.loc[n_wme[int(action_node['on'])-1]]
                 values = action_node.drop({'action', 'on'}).to_dict()
                 new_values = self.parse_values(values, chosen_memory)
-                for n_key in range(len(values.keys())):
-                    #print(values.keys()[n_key]),
-                    #print(new_values[n_key])
-                    self.wm.iloc[n_wme][values.keys()[n_key]] = new_values[n_key]
+                action_pairs = dict(zip(values.keys(), new_values))
+                for key, val in action_pairs.iteritems():
+                    wme = n_wme[int(action_node['on'])-1]
+                    self.wm.loc[wme, key] = val
 
         return self.wm
 
     def parse_values(self, _values, _vars):
         out_values = []
-        print(_values)
         for key, value in _values.iteritems():
             value = str(value)
             # evaluation
@@ -410,13 +485,15 @@ class Rete():
                 args = args.replace('&', ' and ').replace('|', ' or ')
                 vars = re.findall(r'[a-z]+', args)
                 for var in vars:
-                    args = args.replace(var, _vars.loc[0].to_dict()[var])
+                    new_val = _vars[var].dropna().values[0]
+                    args = args.replace(var, new_val)
                 result = eval(args)
                 out_values.append(str(result))
 
             # variables
             elif len(value) == 1 and value.islower():
-                out_values.append(str(_vars[value]))
+                new_val = _vars[value].dropna().values[0]
+                out_values.append(new_val)
 
             # atom
             else:
