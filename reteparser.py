@@ -355,7 +355,7 @@ class Rete():
 
             if chosen == None:
                 print('')
-                print('All rule-wme pairs used: terminating')
+                print('all rule-wme pairs have been used: terminating')
                 raise SystemExit
 
         loop_test = []
@@ -372,6 +372,7 @@ class Rete():
 
         self.saved_memory.append(chosen)
         print('chosen (rule:wme)')
+        print(chosen),
         print(str(chosen['rule']) + ':' + str(chosen['wme']).translate(None, '[]'))
 
         return chosen
