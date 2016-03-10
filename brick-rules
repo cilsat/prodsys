@@ -1,3 +1,2 @@
-if (negation:False type:counter value:x) then
-if (negation:False type:brick position:hand) (negation:False type:counter value:i) then (action:modify on:1 position:i) (action:modify on:2 value:[i+1])
+if (negation:False type:counter value:i) (negation:False type:brick position:hand) then (action:modify on:2 position:i) (action:modify on:1 value:[i+1])
 if (negation:False type:brick position:heap name:n size:s) (negation:True type:brick position:heap size:{>s}) (negation:True type:brick position:hand) then (action:modify on:1 position:hand)

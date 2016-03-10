@@ -7,6 +7,7 @@ import re
 import string
 
 from collections import OrderedDict
+import itertools as iter
 
 # reserved keywords and characters
 conditional = ['if', 'then']
@@ -16,18 +17,19 @@ conjuctions = ['<', '>', '<=', '>=', '!=', '==']
 
 class Rete():
 
-    def __init__(self, rules=None, facts=None, policy='order', debug=False):
+    def __init__(self, rules=None, facts=None, policy='order', debug=-1):
         self.dbg = debug
         # build if rules and facts are specified
         if rules and facts:
             self.init_rete(rules)
             self.init_wm(facts)
 
-            if self.dbg:
+            if self.dbg == 0:
                 print(self.nodes_alpha)
                 print(self.wm)
 
             self.match()
+            print('working memory')
             print(self.wm)
 
             self.threshold = 10
@@ -44,18 +46,18 @@ class Rete():
 
             while chosen:
                 self.apply_action(chosen)
+                print('working memory')
                 print(self.wm)
 
                 self.match()
                 #print(self.matches)
-                chosen = self.resolve_conflicts(self.matches, policy)
                 try:
+                    chosen = self.resolve_conflicts(self.matches, policy)
                     print('')
                 except:
                     print('')
                     print('End of process')
                     break
-                
 
     # generates the required Rete structures from plaintext
     def init_rete(self, _rules):
@@ -141,41 +143,62 @@ class Rete():
             an = self.nodes_alpha.copy()
             an = [an.loc[n].dropna() for n in an.index]
             wm = self.wm
-            #bm = self.build_map_beta(self.map_alpha)
         except:
             print("Error: Rete uninitialized")
 
-        # for each node and for each wme
+        # alpha matching: generate alpha memory for each alpha node
         am = []
         for cond in an:
-            if self.dbg:
+            if self.dbg == 0:
                 print('alpha '),
                 print(cond.name),
                 print([[key,val] for key, val in cond.iteritems()])
             am.append(self.alpha_match(cond, wm))
-
         self.alpha_memory = am
+
+        # beta matching: generate beta memory iteratively for each beta node
+        # TODO modify for use with rete network rather than alpha map
         self.beta_memory = []
-        
         rules_matched = []
         for rule in self.map_alpha:
-            bm = self.alpha_memory[rule[0]]
             rule_matches = []
-            for n in range(1, len(rule)):
-                bm = self.beta_match(bm, rule[n])
-                rule_matches.append(bm)
+            # check if rule has multiple conditions: if not, just pass the alpha
+            bm = self.alpha_memory[rule[0]].reset_index().rename(columns={'index':'0'})
+            if len(rule) > 1:
+                node_type = self.nodes_alpha.loc[rule[0], 'type']
+                for n in range(1, len(rule)):
+                    # determine whether we need to append or concat on node
+                    diff_type = False
+                    curr_type = self.nodes_alpha.loc[rule[n], 'type']
+                    if self.dbg == 1:
+                        print(node_type),
+                        print(curr_type)
+                    if node_type != curr_type:
+                        diff_type = True
+                    # previous beta memory and alpha mem index is passed (rather than the mem itself)
+                    bm = self.beta_match(bm, rule[n], n, diff_type)
+                    rule_matches.append(bm)
+                    node_type = curr_type
+            else:
+                if self.dbg == 1: print('\nno beta match')
+
             rules_matched.append(bm)
             self.beta_memory.append(rule_matches)
 
         self.rules_memory = rules_matched
 
+        # finally, generate a list of matching rules-wmes
         matches = []
-        for rule in rules_matched:
-            if rule.isnull().values.any():
-                matches.append([list(rule.index)])
-            else:
-                matches.append([[n] for n in rule.index])
-
+        for nrule, rule in enumerate(rules_matched):
+            rule_depth = range(len(self.map_alpha[nrule]))
+            partial_matches = []
+            for n in rule.index:
+                try:
+                    wme_set = [rule.loc[n, str(dep)] for dep in rule_depth]
+                    partial_matches.append(wme_set)
+                except:
+                    partial_matches.append([])
+            matches.append(partial_matches)
         self.matches = matches
 
     def alpha_match(self, _cond, _wm):
@@ -195,7 +218,7 @@ class Rete():
             for tup in cond.iteritems():
                 tally_matches.append(self.eval_attribute(tup, wme, neg, local_vars, index=wm_type.index))
 
-            if self.dbg:
+            if self.dbg == 0:
                 print(list(cond.keys())),
                 print(tally_matches)
 
@@ -211,31 +234,58 @@ class Rete():
         # returns alpha memory, with indexes representing WME
         return pd.DataFrame(alpha_vars, index=alpha_idxs)
 
-    def beta_match(self, _mem1, _mem2):
+    def beta_match(self, _mem1, _mem2, _n, _diff_type=True):
         am1 = _mem1
-        am2 = self.alpha_memory[_mem2]
+        am2 = self.alpha_memory[_mem2].reset_index().rename(columns={'index':str(_n)})
+        lam1 = len(am1.index)
+        lam2 = len(am2.index)
 
-        if len(am1.columns) == 0:
-            if  len(am1.index) > 0:
-                bm = am1.append(am2)
-            else:
-                bm = am1
-        else:
+        # if one side has no matches, then both sides have no matches
+        if  lam1*lam2 > 0:
+            # check for columns/variables to merge on
             try:
-                bm = pd.merge(am1, am2, how='inner')
+                bm = am1.merge(am2, how='inner')
+                if self.dbg == 1: print('column merge')
+
+            # no columns/variables to merge on :(
             except:
-                bm = pd.concat([am1, am2], join='inner', axis=1)
+                # append right side if of different type
+                # we return the complete set of combinations of the rows of the left and right sides
+                if _diff_type:
+                    comb = list(iter.product(am1.index, am2.index))
+                    df = []
+                    for a, b in comb:
+                        df.append(am1.loc[a].append(am2.loc[b]).to_dict())
+                    bm = pd.DataFrame(df)
+                    #bm = pd.concat([am1, am2], join='outer', axis=1)
+                    if self.dbg == 1: print('type append')
+
+                # inner concat right side
+                # check for indexes/wmes to merge on
+                else:
+                    bm = pd.concat([am1.set_index(str(_n-1), drop=False), am2.set_index(str(_n), drop=False)], join='inner', axis=1)
+                    if self.dbg == 1: print('index concat')
+
+            if self.dbg == 1:
+                print(am1)
+                print('')
+                print(am2)
+                print('')
+                print(bm)
+                print('')
+        else:
+            bm = pd.DataFrame()
 
         # check for unhandled expressions from previous round of matching
         # TODO add safeguards for [eval] and make less fugly
-        unhandled = [var for var in bm.columns if len(var) > 1]
+        unhandled = [var for var in bm.columns if len(str(var)) > 1]
         try:
             len(unhandled) < 2
         except:
             print("Warning: unpredictable behaviour ahead")
         if unhandled:
             cond = self.nodes_alpha.loc[_mem2]
-            if self.dbg:
+            if self.dbg == 0:
                 print(unhandled)
                 print(cond)
             neg = eval(cond['negation'])
@@ -265,13 +315,12 @@ class Rete():
     def resolve_conflicts(self, _matches, _policy='order'):
 
         print('')
-        print('conflict set (rule:wme)')
+        print('conflict set -> chosen (rule:[wme])')
         all_rules = []
         for n_rule, rule in enumerate( _matches):
             for wme in rule:
                 all_rules.append({'rule':n_rule, 'wme':wme})
-                print(str(n_rule) + ':' + str(wme).translate(None, '[]') + ','),
-        print('')
+                print(str(n_rule) + ':' + str(wme) + ','),
 
         chosen = None
 
@@ -358,6 +407,7 @@ class Rete():
                 print('all rule-wme pairs have been used: terminating')
                 raise SystemExit
 
+        # detect infinite loops through a 10 item loop test
         loop_test = []
         for n in range(self.threshold):
             if self.saved_memory[-(n+1)] == chosen:
@@ -371,15 +421,13 @@ class Rete():
             raise SystemExit
 
         self.saved_memory.append(chosen)
-        print('chosen (rule:wme)')
-        print(chosen),
-        print(str(chosen['rule']) + ':' + str(chosen['wme']).translate(None, '[]'))
+        print(' -> ' + str(chosen['rule']) + ':' + str(chosen['wme']))
 
         return chosen
 
     def eval_attribute(self, _cond, _fact, _neg=False, _var={}, index=None, return_var=False):
         key, val = _cond
-        if self.dbg:
+        if self.dbg == 0:
             print(key in _fact.index)
             print(key, val)
         # expression
@@ -399,7 +447,8 @@ class Rete():
                     except:
                         pass
                     for varkey, varval in _var.iteritems():
-                        args = args.replace(varkey, varval)
+                        if varkey.islower():
+                            args = args.replace(varkey, varval)
                     if args[0] in operators:
                         try:
                             wm_sub = 'self.wm.loc[index][key].astype(float)'
