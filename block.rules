@@ -1,3 +1,3 @@
-if (negation:False type:block name:x on:y) (negation:False type:block name:y leftof:z) (negation:False type:block name:z color:red) then
-if (negation:False type:block name:x on:y) (negation:False type:block name:y leftof:z) (negation:False type:block name:z on:table) then
-if (negation:True type:block name:x on:table) (negation:False type:block name:x color:c) then
+if (negate:False type:block name:x on:y) (negate:False type:block name:y leftof:z) (negate:False type:block name:z color:red) then
+if (negate:False type:block name:x on:y) (negate:False type:block name:y leftof:z) (negate:False type:block name:z on:table) then
+if (negate:True type:block name:x on:table) (negate:False type:block name:x color:c) then

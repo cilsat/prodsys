@@ -9,6 +9,8 @@ import string
 from collections import OrderedDict
 import itertools as iter
 
+from IPython.display import display, HTML
+
 # reserved keywords and characters
 conditional = ['if', 'then']
 action = ['add', 'remove', 'modify']
@@ -17,42 +19,59 @@ conjuctions = ['<', '>', '<=', '>=', '!=', '==']
 
 class Rete():
 
-    def __init__(self, rules=None, facts=None, policy='order', debug=-1):
+    def __init__(self, rules='rules', facts='facts', policy='refractor', debug='web'):
         self.dbg = debug
         # build if rules and facts are specified
         if rules and facts:
-            self.init_rete(rules)
-            self.init_wm(facts)
+            # parse rules: build alpha nodes, conditions, and actions
+            self.init_rete(open(rules).read())
+            # parse facts: build working memory
+            self.init_wm(open(facts).read())
+            # wme index counter: gives out wme index during adds
+            self.wm_index = len(self.wm.index)
 
-            if self.dbg == 0:
+            if self.dbg == 'cli':
                 print(self.nodes_alpha)
                 print(self.wm)
 
+            if self.dbg == 'web':
+                print('Alpha Nodes:')
+                display(self.nodes_alpha)
+
             self.match()
-            print('working memory')
-            print(self.wm)
+            if self.dbg == 'cli':
+                print('working memory')
+                print(self.wm)
 
             self.threshold = 10
             self.saved_memory = [{'n_rule':'None', 'rule':pd.DataFrame()}]*self.threshold
-
-            if policy == 'refractor':
-                self.refractor_table = [[] for _ in range(len(self.map_alpha))]
+            self.refractor_table = [[] for _ in range(len(self.map_alpha))]
+            self.policy = policy
 
             m = self.matches
             #print(self.matches)
 
-            chosen = self.resolve_conflicts(m, policy)
+            chosen = self.resolve_conflicts(m, self.policy)
             print('')
 
+            n_iter = 0
+
             while chosen:
+                if self.dbg == 'web':
+                    print('\n' + str(n_iter) + ' Working Memory:')
+                    display(self.wm)
+
                 self.apply_action(chosen)
-                print('working memory')
-                print(self.wm)
+
+                if self.dbg == 'cli':
+                    print('working memory')
+                    print(self.wm)
 
                 self.match()
                 #print(self.matches)
                 try:
-                    chosen = self.resolve_conflicts(self.matches, policy)
+                    chosen = self.resolve_conflicts(self.matches, self.policy)
+                    n_iter += 1
                     print('')
                 except:
                     print('')
@@ -202,8 +221,8 @@ class Rete():
         self.matches = matches
 
     def alpha_match(self, _cond, _wm):
-        cond = _cond.drop({'type', 'negation'})
-        neg = eval(_cond['negation'])
+        cond = _cond.drop({'type', 'negate'})
+        neg = eval(_cond['negate'])
 
         alpha_idxs = []
         alpha_vars = []
@@ -224,7 +243,7 @@ class Rete():
 
             # tally truth values of attributes
             ismatch = True if np.all(tally_matches) else False
-            # negation matching last
+            # negate matching last
             ismatch = (neg != ismatch)
 
             if ismatch:
@@ -288,8 +307,8 @@ class Rete():
             if self.dbg == 0:
                 print(unhandled)
                 print(cond)
-            neg = eval(cond['negation'])
-            cond = cond.drop({'type', 'negation'}).dropna()
+            neg = eval(cond['negate'])
+            cond = cond.drop({'type', 'negate'}).dropna()
 
             bm_idxs = []
             bm_vars = []
@@ -301,7 +320,7 @@ class Rete():
                     tally_matches.append(tally)
                 # tally truth values of attributes
                 ismatch = True if np.all(tally_matches) else False
-                # negation matching last
+                # negate matching last
                 ismatch = (neg != ismatch)
 
                 if ismatch:
@@ -314,8 +333,9 @@ class Rete():
 
     def resolve_conflicts(self, _matches, _policy='order'):
 
-        print('')
-        print('conflict set -> chosen (rule:[wme])')
+        if self.dbg == 'cli':
+            print('')
+            print('conflict set -> chosen (rule:[wme])')
         all_rules = []
         for n_rule, rule in enumerate( _matches):
             for wme in rule:
@@ -337,28 +357,28 @@ class Rete():
             r = np.random.randint(0, len(all_rules))
             chosen = all_rules[r]
 
-        elif _policy == 'recent_first' or _policy == 'recent_last':
-            for n in range(len(self.saved_memory)):
-                iterator = -(n+1) if _policy == 'recent_first' else n
-                mem = self.saved_memory[iterator]
-                print(mem)
-                for rule in all_rules:
-                    # look for first rule in memory that is in matches
-                    if mem == rule:
-                        chosen = rule
-                        break
-                else:
-                    continue
-                break
+        elif _policy == 'most_recent' or _policy == 'least_recent':
+            sm = list(reversed(self.saved_memory))
+            last_used = [None for _ in range(len(all_rules))]
 
-            if chosen == None and _policy == 'recent_first':
-                print('No recently chosen rules, using order instead')
-                chosen = self.resolve_conflicts(_matches)
-            elif chosen == None and _policy == 'recent_last':
-                # choose a random wme that isn't in memory
-                for rule in all_rules:
-                    if rule not in self.saved_memory:
-                        chosen = rule
+            for n_rule, rule in enumerate(all_rules):
+                for n_s_rule, s_rule in enumerate(sm, 1):
+                    if rule == s_rule:
+                        last_used[n_rule] = n_s_rule
+                    break
+
+            print('last used: '),
+            print(last_used)
+
+            if last_used != [None for _ in range(len(all_rules))]:
+                if _policy == 'most_recent':
+                    chosen = all_rules[np.argmin(last_used)]
+                elif _policy == 'least_recent':
+                    chosen = all_rules[np.argmax(last_used)]
+
+            if chosen == None:
+                print('Current conflict set has never been chosen, refractoring')
+                chosen = self.resolve_conflicts(_matches, _policy='refractor')
             
         # choose most specific rule: the rule for which its WMEs are the subset of the most other rules
         elif _policy == 'specific':
@@ -407,6 +427,10 @@ class Rete():
                 print('all rule-wme pairs have been used: terminating')
                 raise SystemExit
 
+        # update refractor table anyway, just in case
+        if _policy != 'refractor' and chosen:
+            self.refractor_table[chosen['rule']].append(chosen['wme'])
+
         # detect infinite loops through a 10 item loop test
         loop_test = []
         for n in range(self.threshold):
@@ -414,14 +438,22 @@ class Rete():
                 loop_test.append(True)
             else:
                 loop_test.append(False)
+
+        self.saved_memory.append(chosen)
+
         # if loop_test contains a False value then everything's OK
         if not np.any(False == np.array(loop_test)):
             print('')
-            print("You're probably stuck in some kind of loop: terminating")
-            raise SystemExit
+            print("You're probably stuck in some kind of loop: refractoring")
+            self.policy = 'refractor'
+            chosen = self.resolve_conflicts(_matches, _policy=self.policy)
 
-        self.saved_memory.append(chosen)
-        print(' -> ' + str(chosen['rule']) + ':' + str(chosen['wme']))
+        if self.dbg == 'cli':
+            print(' -> ' + str(chosen['rule']) + ':' + str(chosen['wme']))
+        if self.dbg == 'web':
+            print('Chosen Rule/WME:'),
+            display(self.nodes_alpha.loc[self.map_alpha[chosen['rule']]].dropna(axis=1, how='all')),
+            display(self.wm.loc[set(chosen['wme'])])
 
         return chosen
 
@@ -509,10 +541,10 @@ class Rete():
                 df = dict(zip(values.keys(), new_values))
 
                 # insert new WME at the end of the table and make sure the columns are available
-                idx = list(self.wm.index)
-                target_idx = idx[-1] if len(idx) > 0 else 0
+                target_idx = self.wm_index
                 for key, val in df.iteritems():
                     self.wm.loc[target_idx, key] = val
+                self.wm_index += 1
 
             elif action_name == 'modify':
                 wme = self.wm.loc[n_wme[int(action_node['on'])-1]]
