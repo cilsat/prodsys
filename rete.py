@@ -3,6 +3,8 @@
 import numpy as np
 import pandas as pd
 
+import retenode as rn
+
 import re
 import string
 
@@ -18,85 +20,122 @@ operators = '<>!=&|%'
 conjuctions = ['<', '>', '<=', '>=', '!=', '==']
 
 class Rete():
+    """
+    Initialize all class attributes: read this as a sort of Contents
+    """
+    def __init__(self, rules=None, facts=None, policy='refractor', debug='cli'):
+        # user-facing attributes
+        self.policy = policy    # options are 'order', 'recent_first', 'recent_last',
+                                # 'specific', and 'refractor'.
 
-    def __init__(self, rules='rules', facts='facts', policy='refractor', debug='cli'):
-        self.dbg = debug
-        # build if rules and facts are specified
+        self.dbg = debug        # options are 'cli' and 'web'. choose 'web' if running
+                                # on ipython/jupyter notebook.
+
+        # internal attributes/structures
+        self.wm = None          # pandas dataframe (henceforth 'table') representing
+                                # the working memory (WM), containing all current
+                                # working memoty elements (WMEs)
+
+        self.net = None         # structure that contains all alpha and beta nodes
+                                # the first element is always the root node
+
+        # if the rules and facts are already specified, let's get the party started!
         if rules and facts:
-            # parse rules: build alpha nodes, conditions, and actions
-            self.init_rete(open(rules).read())
-            # parse facts: build working memory
-            self.init_wm(open(facts).read())
-            # wme index counter: gives out wme index during adds
-            self.wm_index = len(self.wm.index)
+            # parse rules to obtain conditions to match and actions to perform
+            conditions, actions = self.parse_rules(rules)
 
-            n_iter = 0
-            if self.dbg == 'cli':
-                print('conditions:')
-                print(pd.DataFrame(self.conditions, columns=self.cond_cols))
-                print('')
-                print('alpha nodes:')
-                print(self.alpha_nodes)
-                print('')
-                print('rete network:')
-                print('original:'),
-                print(self.ori_net)
-                print('alpha:'),
-                print(self.alpha_net)
-                print('\nfacts')
-                print(self.wm)
+            # parse facts to obtain initial working memory
+            self.wm = self.parse_facts(facts)
 
-            if self.dbg == 'web':
-                print('Conditions:')
-                display(pd.DataFrame(self.conditions, columns=self.cond_cols))
-                print('Alpha Nodes:')
-                display(self.alpha_nodes)
-                print('Rete Network:')
-                print('Alpha:'),
-                print(self.alpha_net)
-                print('\nFacts:')
-                display(self.wm)
+            # build rete alpha and beta node network from conditions
+            self.net = self.init_rete(conditions)
 
-            self.match()
+            # start main loop: match, choose, and apply till WM is exhausted or condition is met
+            self.main_loop()
 
-            self.threshold = 10
-            self.saved_memory = [{'n_rule':[None], 'rule':None}]*self.threshold
-            self.refractor_table = [[] for _ in range(len(self.alpha_net))]
-            self.policy = policy
 
-            m = self.matches
-            #print(self.matches)
+    """
+    Utilizes the alpha/beta network compiled in the init_rete step. Essentialy does:
+        1. MATCH WMEs through the net to obtain Rule:WME(s) pairs
+        2. CHOOSE ONE pair from a possible set of matches
+        3. APPLY actions from the chosen pair
+        4. TERMINATE when WM is exhausted or when a conflict resolution condition is met
+    """
+    def main_loop(self):
+        # parse rules: build alpha nodes, conditions, and actions
+        self.init_rete(open(self.rules).read())
+        # parse facts: build working memory
+        self.init_wm(open(self.facts).read())
+        # wme index counter: gives out wme index during adds
+        self.wm_index = len(self.wm.index)
 
-            chosen = self.resolve_conflicts(m, self.policy)
+        if self.dbg == 'cli':
+            print('conditions:')
+            print(pd.DataFrame(self.conditions, columns=self.cond_cols))
             print('')
+            print('alpha nodes:')
+            print(self.alpha_nodes)
+            print('')
+            print('rete network:')
+            print('original:'),
+            print(self.ori_net)
+            print('alpha:'),
+            print(self.alpha_net)
+            print('\nfacts')
+            print(self.wm)
 
-            while chosen:
+        if self.dbg == 'web':
+            print('Conditions:')
+            display(pd.DataFrame(self.conditions, columns=self.cond_cols))
+            print('Alpha Nodes:')
+            display(self.alpha_nodes)
+            print('Rete Network:')
+            print('Alpha:'),
+            print(self.alpha_net)
+            print('\nFacts:')
+            display(self.wm)
 
-                old_wm = self.wm.copy()
-                self.apply_action(chosen)
+        self.match()
 
-                if not old_wm.equals(self.wm):
-                    self.match()
-                else:
-                    print('WM unchanged, skipping matching step')
-                #print(self.matches)
+        self.threshold = 10
+        self.saved_memory = [{'n_rule':[None], 'rule':None}]*self.threshold
+        self.refractor_table = [[] for _ in range(len(self.alpha_net))]
+
+        m = self.matches
+        #print(self.matches)
+
+        chosen = self.resolve_conflicts(m, self.policy)
+        print('')
+
+        n_iter = 0
+        while chosen:
+
+            old_wm = self.wm.copy()
+            self.apply_action(chosen)
+
+            if not old_wm.equals(self.wm):
+                self.match()
+            else:
+                print('WM unchanged, skipping matching step')
+            #print(self.matches)
+            print('')
+            if self.dbg == 'web':
+                print(str(n_iter) + ' Working Memory:')
+                display(self.wm)
+            if self.dbg == 'cli':
+                print('working memory')
+                print(self.wm)
+            try:
+                chosen = self.resolve_conflicts(self.matches, self.policy)
+                n_iter += 1
+            except:
                 print('')
-                if self.dbg == 'web':
-                    print(str(n_iter) + ' Working Memory:')
-                    display(self.wm)
-                if self.dbg == 'cli':
-                    print('working memory')
-                    print(self.wm)
-                try:
-                    chosen = self.resolve_conflicts(self.matches, self.policy)
-                    n_iter += 1
-                except:
-                    print('')
-                    print('End of process')
-                    break
+                print('End of process')
+                break
 
-    # generates the required Rete structures from plaintext
-    def init_rete(self, _rules):
+    # generates conditions and actions from input filename
+    def parse_rules(self, _rules):
+        _rules = open(_rules).read()
         # all conditions/actions to be parsed during pattern matching/action
         conditions = []
         actions = []
@@ -138,6 +177,9 @@ class Rete():
 
             rule_condition_map.append(temp_cond_map)
 
+        return conditions, actions
+
+    def init_rete(self, _conditions):
         # alpha nodes: the set of rule conditions
         self.cond_cols = cond_cols
         self.alpha_nodes = pd.DataFrame(conditions, columns=cond_cols)

@@ -1,4 +1,4 @@
-if (negation:False type:bird) then (action:modify on:1 canfly:True)
-if (negation:False type:bird weight:{>100}) then (action:modify on:1 canfly:False)
-if (negation:False type:bird name:penguin) then (action:modify on:1 canfly:False)
-if (negation:True type:bird weight:{<25}) then (action:modify on:1 canfly:True)
+if (negate:False type:bird) then (action:modify on:1 canfly:True)
+if (negate:False type:bird weight:{>100}) then (action:modify on:1 canfly:False)
+if (negate:False type:bird name:penguin) then (action:modify on:1 canfly:False)
+if (negate:True type:bird weight:{<25}) then (action:modify on:1 canfly:True)

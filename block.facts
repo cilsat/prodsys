@@ -1,4 +1,0 @@
-(type:block name:B1 on:B2 color:red leftof:B4)
-(type:block name:B2 on:table color:blue leftof:B3)
-(type:block name:B3 on:table color:red)
-(type:block name:B4 on:B3 color:green)
