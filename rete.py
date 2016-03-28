@@ -10,11 +10,10 @@ import string
 
 from collections import OrderedDict
 import itertools as iter
-
 from IPython.display import display, HTML
 
 # reserved keywords and characters
-conditional = ['if', 'then']
+conditional = ['if', 'then', 'IF', 'THEN']
 action = ['add', 'remove', 'modify']
 operators = '<>!=&|%'
 conjuctions = ['<', '>', '<=', '>=', '!=', '==']
@@ -32,34 +31,196 @@ class Rete():
                                 # on ipython/jupyter notebook.
 
         # internal attributes/structures
-        self.wm = None          # pandas dataframe (henceforth 'table') representing
-                                # the working memory (WM), containing all current
-                                # working memoty elements (WMEs)
+        # top level/main loop
+        self.conditions = None  # pandas dataframe (henceforth 'table') containing 
+                                # antecedents/conditions of all rules.
 
-        self.net = None         # structure that contains all alpha and beta nodes
-                                # the first element is always the root node
+        self.actions = None     # list of tables of actions of each rule.
+
+        self.wm = None          # table representing the working memory (WM), 
+                                # containing all current working memoty elements.
+
+        self.net = None         # structure that contains all alpha and beta nodes.
+                                # the first element is always the root node.
+
+        # policy attributes
+        self.saved_memory = None    # chose rule-wme buffer/memory. checked each
+                                # iteration to detect infinite loops.
+        self.threshold = 10     # chosen rule-wme buffer/memory size.
+
+        self.refractor_table = None # table that stores instances of previously
+                                # triggered rule-wme pairs. initialized in main loop.
+
+        self.specific_table = None  # table that stores information of how specific
+                                # a rule is. initialized while building network.
 
         # if the rules and facts are already specified, let's get the party started!
         if rules and facts:
             # parse rules to obtain conditions to match and actions to perform
-            conditions, actions = self.parse_rules(rules)
-
-            # parse facts to obtain initial working memory
-            self.wm = self.parse_facts(facts)
+            conditions, actions, map, self.wm = self.parse(rules, facts)
 
             # build rete alpha and beta node network from conditions
-            self.net = self.init_rete(conditions)
+            self.init_net(conditions, actions, map)
 
-            # start main loop: match, choose, and apply till WM is exhausted or condition is met
-            self.main_loop()
+            # start main loop: match, choose, and apply till WM is exhausted or 
+            # conflict resolution stop condition is met
+            #self.main_loop()
 
+
+    """
+    Opens specified files as rules and facts, respectively.
+    Parses file and generates a table of conditionals and list of actions, a list of 
+    rule-conditionals mappings, and table of initial Working Memory Elements.
+    """
+    def parse(self, _rules, _facts):
+        # read files
+        _rules = open(_rules).read()
+        _facts = open(_facts).read()
+
+        # all conditions/actions and their respective attributes
+        conditions = []
+        actions = []
+        cond_cols = []
+        act_cols = []
+
+        # map each rule to its constituent conditions and actions, respectively
+        rule_condition_map = []
+        rule_action_map = []
+        # for each production rule
+        n_cond = 0
+        for pr in [r for r in _rules.split('\n') if r]:
+            try:
+                # split into LHS and RHS, separated by keyword
+                lhs_raw, rhs_raw = pr.split(conditional[1])
+                # split into conditions and actions, separated by brackets
+                conditions_raw = re.findall(r'\((.*?)\)', lhs_raw)
+                actions_raw = re.findall(r'\((.*?)\)', rhs_raw)
+            except:
+                print("Syntax error in rule definition")
+
+            temp_cond_map = []
+            # convert plaintext conditions into dictionaries
+            for cond in conditions_raw:
+                attvals, keys = self.str_to_dict(cond, 'condition')
+                conditions.append(attvals)
+                [cond_cols.append(key) for key in keys if key not in cond_cols]
+                temp_cond_map.append(n_cond)
+                n_cond += 1
+
+            rule_condition_map.append(temp_cond_map)
+
+            temp_act_map = []
+            # convert plaintext actions into dictionaries
+            for act in actions_raw:
+                attvals, keys = self.str_to_dict(act, 'action')
+                [act_cols.append(key) for key in keys if key not in act_cols]
+                temp_act_map.append(attvals)
+
+            actions.append(pd.DataFrame(temp_act_map, columns=act_cols))
+
+        conditions = pd.DataFrame(conditions, columns=cond_cols)
+
+        # all initial WMEs and their attribute names
+        wmes = []
+        fact_cols = []
+        for wme in filter(None, _facts.split('\n')):
+            wme_dict, keys = self.str_to_dict(wme, 'condition')
+            [fact_cols.append(key) for key in keys if key not in fact_cols]
+            wmes.append(wme_dict)
+        wm = pd.DataFrame(wmes, columns=fact_cols)
+
+        return conditions, actions, rule_condition_map, wm
+
+
+    """
+    Builds the RETE network from a table of conditions, actions, and rule-condition mappings:
+        1. Initialize an alpha node for each UNIQUE condition.
+        2. Initialize root node and point to ALL alpha nodes.
+        3. Initialize a beta node for each UNIQUE alpha-alpha OR alpha-beta PAIR in the rule
+           condition mapping.
+        4. Initialize a termination node for each rule in the rule-condition mapping. Bind relevant
+           action to this termination/rule node.
+    """
+    def init_net(self, _conditions, _actions, _map):
+        # method temporary variables
+        node_list = []
+
+        # build a ditionary mapping duplicated nodes to its first occurrence
+        equiv_table = {}
+        for n_node in _conditions.index:
+            node = _conditions.loc[n_node]
+            for n_inner in _conditions.index[n_node:]:
+                inner = _conditions.loc[n_inner]
+                if node.equals(inner) and n_inner != n_node:
+                    equiv_table[n_inner] = n_node
+        # drop duplicate nodes from table
+        alpha_patterns = _conditions.drop_duplicates()
+        alpha_nodes = list(set(alpha_patterns.index))
+        print(_map)
+
+        # update alpha network: replace duplicate nodes with their first occurrence
+        # build beta network
+        beta_nodes = []
+        beta_inputs = []
+        beta_offset = max(alpha_nodes) + 1
+        for n_rule, rule in enumerate(_map):
+            _map[n_rule] = [equiv_table[n] if n in equiv_table.keys() else n for n in rule]
+            sub_map = []
+            if len(rule) == 1: 
+                beta_nodes.append(rule)
+                beta_inputs.append([beta_nodes.index(rule)+beta_offset])
+                continue
+            beta_rule = rule[:]
+            while len(list(beta_rule)) > 1:
+                print("beta:"),
+                print(beta_rule),
+                sub = beta_rule[:2]
+                print("sub:"),
+                print(sub),
+                if sub not in beta_nodes:
+                    beta_nodes.append(sub)
+                idx = beta_nodes.index(sub) + beta_offset
+                print("idx:"),
+                print(idx)
+                if len(beta_rule) == 2:
+                    beta_rule = [idx]
+                else:
+                    beta_rule = [idx] + beta_rule[2:]
+                sub_map.append(beta_rule)
+
+            beta_inputs.append(sub_map)
+
+        print(beta_nodes)
+        print(beta_inputs)
+
+        root = rn.ReteNode(0, 'root', None, list(set(alpha_patterns.index)), self.wm, None)
+
+        """
+        # build rete beta network from alpha network configuration
+        self.beta_nodes = []
+        self.beta_net = []
+        n_bn = 0
+        for rule in self.alpha_net:
+            if len(rule) > 1:
+                alpha_pair = rule[:2]
+                if alpha_pair not in self.beta_nodes:
+                    self.beta_nodes.append(alpha_pair)
+
+        # build specificity table
+        scores = [0 for _ in range(len(self.alpha_net))]
+        for n_rule, rule in enumerate(self.alpha_net):
+            for n in rule:
+                print(self.alpha_nodes.loc[n].dropna().keys())
+                scores[n_rule] += len(self.alpha_nodes.loc[n].dropna().keys())
+        self.specific_table = np.argsort(scores)[::-1]
+        """
 
     """
     Utilizes the alpha/beta network compiled in the init_rete step. Essentialy does:
         1. MATCH WMEs through the net to obtain Rule:WME(s) pairs
         2. CHOOSE ONE pair from a possible set of matches
         3. APPLY actions from the chosen pair
-        4. TERMINATE when WM is exhausted or when a conflict resolution condition is met
+        4. TERMINATE when WM is exhausted or when conflict resolution condition met
     """
     def main_loop(self):
         # parse rules: build alpha nodes, conditions, and actions
@@ -97,7 +258,6 @@ class Rete():
 
         self.match()
 
-        self.threshold = 10
         self.saved_memory = [{'n_rule':[None], 'rule':None}]*self.threshold
         self.refractor_table = [[] for _ in range(len(self.alpha_net))]
 
@@ -132,106 +292,6 @@ class Rete():
                 print('')
                 print('End of process')
                 break
-
-    # generates conditions and actions from input filename
-    def parse_rules(self, _rules):
-        _rules = open(_rules).read()
-        # all conditions/actions to be parsed during pattern matching/action
-        conditions = []
-        actions = []
-
-        cond_cols = []
-        act_cols = []
-        # map each rule to its constituent conditions and actions, respectively
-        rule_condition_map = []
-        rule_action_map = []
-        # for each production rule
-        n_cond = 0
-        for pr in [r for r in _rules.split('\n') if r]:
-            try:
-                # split into LHS and RHS, separated by keyword
-                lhs_raw, rhs_raw = pr.split(conditional[1])
-                # split into conditions and actions, separated by brackets
-                conditions_raw = re.findall(r'\((.*?)\)', lhs_raw)
-                actions_raw = re.findall(r'\((.*?)\)', rhs_raw)
-            except:
-                print("Syntax error in rule definition")
-
-            temp_cond_map = []
-            # convert plaintext conditions into dictionaries
-            for cond in conditions_raw:
-                attvals, keys = self.str_to_dict(cond, 'condition')
-                conditions.append(attvals)
-                [cond_cols.append(key) for key in keys if key not in cond_cols]
-                temp_cond_map.append(n_cond)
-                n_cond += 1
-
-            temp_act_map = []
-            # convert plaintext actions into dictionaries
-            for act in actions_raw:
-                attvals, keys = self.str_to_dict(act, 'action')
-                [act_cols.append(key) for key in keys if key not in act_cols]
-                temp_act_map.append(attvals)
-
-            actions.append(pd.DataFrame(temp_act_map, columns=act_cols))
-
-            rule_condition_map.append(temp_cond_map)
-
-        return conditions, actions
-
-    def init_rete(self, _conditions):
-        # alpha nodes: the set of rule conditions
-        self.cond_cols = cond_cols
-        self.alpha_nodes = pd.DataFrame(conditions, columns=cond_cols)
-        self.conditions = conditions
-        self.actions = actions
-        # rule map: maps rules to their conditions 
-        self.alpha_net = rule_condition_map
-
-        # build rete network: node sharing for identical conditions
-        # build a ditionary mapping duplicated nodes to its first occurrence
-        equiv_table = {}
-        for n_node in self.alpha_nodes.index:
-            node = self.alpha_nodes.loc[n_node]
-            for n_inner in self.alpha_nodes.index[n_node:]:
-                inner = self.alpha_nodes.loc[n_inner]
-                if node.equals(inner) and n_inner != n_node:
-                    equiv_table[n_inner] = n_node
-        # drop duplicate nodes from table
-        self.alpha_nodes.drop_duplicates(inplace=True)
-
-        # update alpha network: replace duplicate nodes with their first occurrence
-        self.ori_net = self.alpha_net[:]
-        for n_rule, rule in enumerate(self.alpha_net):
-            self.alpha_net[n_rule] = [equiv_table[n] if n in equiv_table.keys() else n for n in rule]
-
-        # build rete beta network from alpha network configuration
-        self.beta_nodes = []
-        self.beta_net = []
-        n_bn = 0
-        for rule in self.alpha_net:
-            if len(rule) > 1:
-                alpha_pair = rule[:2]
-                if alpha_pair not in self.beta_nodes:
-                    self.beta_nodes.append(alpha_pair)
-
-        # build specificity table
-        scores = [0 for _ in range(len(self.alpha_net))]
-        for n_rule, rule in enumerate(self.alpha_net):
-            for n in rule:
-                print(self.alpha_nodes.loc[n].dropna().keys())
-                scores[n_rule] += len(self.alpha_nodes.loc[n].dropna().keys())
-        self.specific_table = np.argsort(scores)[::-1]
-
-    # initializes WM from a joint table of all WMEs from plaintext facts
-    def init_wm(self, _facts):
-        wmes = []
-        cols = []
-        for wme in filter(None, _facts.split('\n')):
-            wme_dict, keys = self.str_to_dict(wme, 'condition')
-            [cols.append(key) for key in keys if key not in cols]
-            wmes.append(wme_dict)
-        self.wm = pd.DataFrame(wmes, columns=cols)
 
     def str_to_dict(self, _str, _sender="unspecified"):
         # attribut-value tuple
