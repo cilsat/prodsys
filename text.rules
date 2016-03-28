@@ -1,0 +1,4 @@
+if (type:text negate:False title:x author:y format:z) (type:writer negate:False name:y genre:a) then (action:modify on:1 genre:a) (action:modify on:2 format:z)
+if (type:text negate:False author:y genre:z) (type:writer negate:False name:y) then (action:remove on:2)
+if (type:text negate:False author:y genre:z) then (action:add on:1 name:y genre:z)
+if (type:text negate:False title:neuromancer) then (action:add type:user rating:5)

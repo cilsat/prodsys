@@ -1,0 +1,7 @@
+(type:text title:the_last_question author:isaac_asimov format:short)
+(type:text title:the_lord_of_the_rings author:jrr_tolkien format:novel)
+(type:text title:neuromancer author:william_gibson format:novel)
+(type:text title:never_let_me_go author:kazuo_ishiguro genre:scifi)
+(type:writer name:isaac_asimov genre:scifi)
+(type:writer name:jrr_tolkien genre:fantasy)
+(type:writer name:william_gibson genre:scifi)
