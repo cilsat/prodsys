@@ -248,6 +248,7 @@ class Rete():
                 val.print_node()
         return rete_net
 
+
     """
     Utilizes the alpha/beta network compiled in the init_rete step. Essentialy does:
         1. MATCH WMEs through the net to obtain Rule:WME(s) pairs
@@ -263,36 +264,21 @@ class Rete():
         self.saved_memory = [{'n_rule':[None], 'rule':None}]*self.threshold
         self.refractor_table = [[] for _ in range(len(self.alpha_net))]
 
-        # start the initial matching process
-        conflict_set = self.match()
-
-        # choose a rule-wme pair from conflict set
-        chosen = self.resolve_conflicts(conflict_set)
-
         n_iter = 0
-        while chosen:
-            old_wm = self.wm.copy()
-            self.apply_action(chosen)
+        while True:
+            # start the matching process
+            conflict_set = self.match()
 
-            if not old_wm.equals(self.wm):
-                self.match()
-            else:
-                print('WM unchanged, skipping matching step')
-            #print(self.matches)
-            print('')
-            if self.dbg == 'web':
-                print(str(n_iter) + ' Working Memory:')
-                display(self.wm)
-            if self.dbg == 'cli':
-                print('working memory')
-                print(self.wm)
+            # choose a rule-wme pair from conflict set
+            # if no rules are chosen, terminate
             try:
-                chosen = self.resolve_conflicts(self.matches, self.policy)
-                n_iter += 1
+                chosen = self.resolve_conflicts(conflict_set)
             except:
-                print('')
-                print('End of process')
+                print('process terminating')
                 break
+
+            # apply actions from chosen rule-wme pair
+            self.apply_action(chosen)
 
 
     def str_to_dict(self, _str, _sender="unspecified"):
