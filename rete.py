@@ -149,10 +149,11 @@ class Rete():
         equiv_table = {}
         for n_node in _conditions.index:
             node = _conditions.loc[n_node]
-            for n_inner in _conditions.index[n_node:]:
+            for n_inner in _conditions.index[n_node+1:]:
                 inner = _conditions.loc[n_inner]
-                if node.equals(inner) and n_inner != n_node:
+                if node.equals(inner) and n_inner not in equiv_table.keys():
                     equiv_table[n_inner] = n_node
+
         # drop duplicate nodes from table
         alpha_patterns = _conditions.drop_duplicates()
         alpha_nodes = list(set(alpha_patterns.index))
@@ -166,51 +167,71 @@ class Rete():
         rule_nodes = []
         beta_offset = max(alpha_nodes) + 1
         for n_rule, rule in enumerate(_map):
-            sub_map = []
-            if len(rule) == 1: 
-                beta_nodes.append(rule)
-                beta_inputs.append([beta_nodes.index(rule)+beta_offset])
-                continue
             beta_rule = rule[:]
-            while len(list(beta_rule)) > 1:
-                sub = beta_rule[:2]
-                if sub not in prev_nodes:
-                    prev_nodes.append(sub)
-                idx = prev_nodes.index(sub) + beta_offset
-                if self.dbg == 'vv':
-                    print("sub:"),
-                    print(sub),
-                    print("beta:"),
-                    print(beta_rule),
-                    print("idx:"),
-                    print(idx)
-                if len(beta_rule) == 2:
-                    beta_rule = [idx]
+            while len(list(beta_rule)) >= 1:
+                if len(beta_rule) == 1: 
+                    if beta_rule not in prev_nodes: prev_nodes.append(beta_rule)
+                    break
                 else:
-                    beta_rule = [idx] + beta_rule[2:]
+                    sub = beta_rule[:2]
+                    if sub not in prev_nodes:
+                        prev_nodes.append(sub)
+                    idx = prev_nodes.index(sub) + beta_offset
+                    if self.dbg == 'init_net':
+                        print("sub:"),
+                        print(sub),
+                        print("beta:"),
+                        print(beta_rule),
+                        print("idx:"),
+                        print(idx)
+                    if len(beta_rule) == 2:
+                        beta_rule = [idx]
+                    else:
+                        beta_rule = [idx] + beta_rule[2:]
 
             rule_nodes.append(beta_rule)
 
-        rete_nodes = dict(zip(alpha_nodes, [-1]*len(alpha_nodes)))
+        rete_nodes = dict(zip(alpha_nodes, [[-1]]*len(alpha_nodes)))
         for n_node, node in enumerate(prev_nodes):
             rete_nodes[n_node + beta_offset] = node
-        print(_map)
-        print(prev_nodes)
-        print(rule_nodes)
-        print(rete_nodes)
+        if self.dbg == 'init_net':
+            print(_map)
+            print(prev_nodes)
+            print(rule_nodes)
+            print(rete_nodes)
 
-        root = rn.ReteNode(0, 'root', None, list(set(alpha_patterns.index)), self.wm, None)
+        # initialize rete network (as dictionary) and populate with nodes
+        rete_net = {}
+        # create root node
+        root = rn.ReteNode(-1, 'root', None, [], self.wm, None)
+        # push root node into rete net
+        rete_net[-1] = root
+        # create other nodes
+        for node_id, prev in rete_nodes.iteritems():
+            # alpha node connected to root
+            if len(prev) == 1 and prev[0] == -1:
+                node = rn.ReteNode(node_id, 'alpha', prev, [], _match=rn.ReteNode.alpha_match)
+            # rule node
+            elif len(prev) == 1 and prev[0] != -1:
+                node = rn.ReteNode(node_id, 'rule', prev, None)
+            # beta node
+            else:
+                node = rn.ReteNode(node_id, 'beta', prev, [], _match=rn.ReteNode.beta_match)
 
-        """
-        # build rete beta network from alpha network configuration
-        self.beta_nodes = []
-        self.beta_net = []
-        n_bn = 0
-        for rule in self.alpha_net:
-            if len(rule) > 1:
-                alpha_pair = rule[:2]
-                if alpha_pair not in self.beta_nodes:
-                    self.beta_nodes.append(alpha_pair)
+            # insert into our dict of nodes
+            rete_net[node_id] = node
+
+            # generate successor nodes
+            for p in prev:
+                try:
+                    rete_net[p].next.append(node_id)
+                except:
+                    print("attempting to add successor to nonexistant or rule node")
+                    raise SystemExit
+
+        if self.dbg == 'cli':
+            for key, val in rete_net.iteritems():
+                val.print_node()
 
         # build specificity table
         scores = [0 for _ in range(len(self.alpha_net))]
@@ -218,8 +239,9 @@ class Rete():
             for n in rule:
                 print(self.alpha_nodes.loc[n].dropna().keys())
                 scores[n_rule] += len(self.alpha_nodes.loc[n].dropna().keys())
+
         self.specific_table = np.argsort(scores)[::-1]
-        """
+
 
     """
     Utilizes the alpha/beta network compiled in the init_rete step. Essentialy does:
