@@ -40,8 +40,9 @@ class Rete():
         self.wm = None          # table representing the working memory (WM), 
                                 # containing all current working memoty elements.
 
-        self.net = None         # structure that contains all alpha and beta nodes.
-                                # the first element is always the root node.
+        self.net = None         # dictionary that contains all alpha, beta, and
+                                # termination nodes. the first element (-1) is always 
+                                # the root node.
 
         # policy attributes
         self.saved_memory = None    # chose rule-wme buffer/memory. checked each
@@ -58,13 +59,20 @@ class Rete():
         if rules and facts:
             # parse rules to obtain conditions to match and actions to perform
             conditions, actions, map, self.wm = self.parse(rules, facts)
+            if self.dbg == 'cli':
+                print('conditions:')
+                print(conditions)
+                print('\nrule-condition map:'),
+                print(map)
+                print('facts:')
+                print(self.wm)
 
             # build rete alpha and beta node network from conditions
-            self.init_net(conditions, actions, map)
+            self.net = self.init_net(conditions, actions, map)
 
             # start main loop: match, choose, and apply till WM is exhausted or 
             # conflict resolution stop condition is met
-            #self.main_loop()
+            self.main_loop()
 
 
     """
@@ -142,8 +150,14 @@ class Rete():
            action to this termination/rule node.
     """
     def init_net(self, _conditions, _actions, _map):
-        # method temporary variables
-        node_list = []
+
+        # build specificity table
+        scores = [0 for _ in range(len(_map))]
+        for n_rule, rule in enumerate(_map):
+            for n in rule:
+                scores[n_rule] += len(_conditions.loc[n].dropna().keys())
+
+        self.specific_table = np.argsort(scores)[::-1]
 
         # build a ditionary mapping duplicated nodes to its first occurrence
         equiv_table = {}
@@ -168,7 +182,7 @@ class Rete():
         beta_offset = max(alpha_nodes) + 1
         for n_rule, rule in enumerate(_map):
             beta_rule = rule[:]
-            while len(list(beta_rule)) >= 1:
+            while True:
                 if len(beta_rule) == 1: 
                     if beta_rule not in prev_nodes: prev_nodes.append(beta_rule)
                     break
@@ -203,14 +217,14 @@ class Rete():
         # initialize rete network (as dictionary) and populate with nodes
         rete_net = {}
         # create root node
-        root = rn.ReteNode(-1, 'root', None, [], self.wm, None)
+        root = rn.ReteNode(-1, 'root', None, [], self.wm, rn.ReteNode.root_match)
         # push root node into rete net
         rete_net[-1] = root
         # create other nodes
         for node_id, prev in rete_nodes.iteritems():
             # alpha node connected to root
             if len(prev) == 1 and prev[0] == -1:
-                node = rn.ReteNode(node_id, 'alpha', prev, [], _match=rn.ReteNode.alpha_match)
+                node = rn.ReteNode(node_id, 'alpha', prev, [], _pattern = _conditions.loc[node_id], _match=rn.ReteNode.alpha_match)
             # rule node
             elif len(prev) == 1 and prev[0] != -1:
                 node = rn.ReteNode(node_id, 'rule', prev, None)
@@ -229,19 +243,10 @@ class Rete():
                     print("attempting to add successor to nonexistant or rule node")
                     raise SystemExit
 
-        if self.dbg == 'cli':
+        if self.dbg == 'init_rete':
             for key, val in rete_net.iteritems():
                 val.print_node()
-
-        # build specificity table
-        scores = [0 for _ in range(len(self.alpha_net))]
-        for n_rule, rule in enumerate(self.alpha_net):
-            for n in rule:
-                print(self.alpha_nodes.loc[n].dropna().keys())
-                scores[n_rule] += len(self.alpha_nodes.loc[n].dropna().keys())
-
-        self.specific_table = np.argsort(scores)[::-1]
-
+        return rete_net
 
     """
     Utilizes the alpha/beta network compiled in the init_rete step. Essentialy does:
@@ -251,53 +256,21 @@ class Rete():
         4. TERMINATE when WM is exhausted or when conflict resolution condition met
     """
     def main_loop(self):
-        # parse rules: build alpha nodes, conditions, and actions
-        self.init_rete(open(self.rules).read())
-        # parse facts: build working memory
-        self.init_wm(open(self.facts).read())
-        # wme index counter: gives out wme index during adds
+        # wme index counter: keeps count of wme index during adds
         self.wm_index = len(self.wm.index)
 
-        if self.dbg == 'cli':
-            print('conditions:')
-            print(pd.DataFrame(self.conditions, columns=self.cond_cols))
-            print('')
-            print('alpha nodes:')
-            print(self.alpha_nodes)
-            print('')
-            print('rete network:')
-            print('original:'),
-            print(self.ori_net)
-            print('alpha:'),
-            print(self.alpha_net)
-            print('\nfacts')
-            print(self.wm)
-
-        if self.dbg == 'web':
-            print('Conditions:')
-            display(pd.DataFrame(self.conditions, columns=self.cond_cols))
-            print('Alpha Nodes:')
-            display(self.alpha_nodes)
-            print('Rete Network:')
-            print('Alpha:'),
-            print(self.alpha_net)
-            print('\nFacts:')
-            display(self.wm)
-
-        self.match()
-
+        # initialize policy attributes
         self.saved_memory = [{'n_rule':[None], 'rule':None}]*self.threshold
         self.refractor_table = [[] for _ in range(len(self.alpha_net))]
 
-        m = self.matches
-        #print(self.matches)
+        # start the initial matching process
+        conflict_set = self.match()
 
-        chosen = self.resolve_conflicts(m, self.policy)
-        print('')
+        # choose a rule-wme pair from conflict set
+        chosen = self.resolve_conflicts(conflict_set)
 
         n_iter = 0
         while chosen:
-
             old_wm = self.wm.copy()
             self.apply_action(chosen)
 
@@ -320,6 +293,7 @@ class Rete():
                 print('')
                 print('End of process')
                 break
+
 
     def str_to_dict(self, _str, _sender="unspecified"):
         # attribut-value tuple
