@@ -156,15 +156,16 @@ class Rete():
         # drop duplicate nodes from table
         alpha_patterns = _conditions.drop_duplicates()
         alpha_nodes = list(set(alpha_patterns.index))
-        print(_map)
 
         # update alpha network: replace duplicate nodes with their first occurrence
-        # build beta network
-        beta_nodes = []
-        beta_inputs = []
-        beta_offset = max(alpha_nodes) + 1
         for n_rule, rule in enumerate(_map):
             _map[n_rule] = [equiv_table[n] if n in equiv_table.keys() else n for n in rule]
+
+        # build beta network
+        prev_nodes = []
+        rule_nodes = []
+        beta_offset = max(alpha_nodes) + 1
+        for n_rule, rule in enumerate(_map):
             sub_map = []
             if len(rule) == 1: 
                 beta_nodes.append(rule)
@@ -172,26 +173,31 @@ class Rete():
                 continue
             beta_rule = rule[:]
             while len(list(beta_rule)) > 1:
-                print("beta:"),
-                print(beta_rule),
                 sub = beta_rule[:2]
-                print("sub:"),
-                print(sub),
-                if sub not in beta_nodes:
-                    beta_nodes.append(sub)
-                idx = beta_nodes.index(sub) + beta_offset
-                print("idx:"),
-                print(idx)
+                if sub not in prev_nodes:
+                    prev_nodes.append(sub)
+                idx = prev_nodes.index(sub) + beta_offset
+                if self.dbg == 'vv':
+                    print("sub:"),
+                    print(sub),
+                    print("beta:"),
+                    print(beta_rule),
+                    print("idx:"),
+                    print(idx)
                 if len(beta_rule) == 2:
                     beta_rule = [idx]
                 else:
                     beta_rule = [idx] + beta_rule[2:]
-                sub_map.append(beta_rule)
 
-            beta_inputs.append(sub_map)
+            rule_nodes.append(beta_rule)
 
-        print(beta_nodes)
-        print(beta_inputs)
+        rete_nodes = dict(zip(alpha_nodes, [-1]*len(alpha_nodes)))
+        for n_node, node in enumerate(prev_nodes):
+            rete_nodes[n_node + beta_offset] = node
+        print(_map)
+        print(prev_nodes)
+        print(rule_nodes)
+        print(rete_nodes)
 
         root = rn.ReteNode(0, 'root', None, list(set(alpha_patterns.index)), self.wm, None)
 
