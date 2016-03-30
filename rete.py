@@ -22,7 +22,7 @@ class Rete():
     """
     Initialize all class attributes: read this as a sort of Contents
     """
-    def __init__(self, rules=None, facts=None, policy='refractor', debug='cli'):
+    def __init__(self, rules=None, facts=None, policy='refractor', debug=None):
         # user-facing attributes
         self.policy = policy    # options are 'order', 'recent_first', 'recent_last',
                                 # 'specific', and 'refractor'.
@@ -43,6 +43,9 @@ class Rete():
         self.net = None         # dictionary that contains all alpha, beta, and
                                 # termination nodes. the first element (-1) is always 
                                 # the root node.
+        self.alpha_nodes = []   # a convenience list of only the alpha nodes.
+        self.beta_nodes = []    # a convenience list of only the neta nodes.
+        self.rule_nodes = []    # a convenience list of only the rule nodes.
 
         # policy attributes
         self.saved_memory = None    # chose rule-wme buffer/memory. checked each
@@ -59,6 +62,7 @@ class Rete():
         if rules and facts:
             # parse rules to obtain conditions to match and actions to perform
             conditions, actions, map, self.wm = self.parse(rules, facts)
+
             if self.dbg == 'cli':
                 print('conditions:')
                 print(conditions)
@@ -66,6 +70,13 @@ class Rete():
                 print(map)
                 print('facts:')
                 print(self.wm)
+            if self.dbg == 'web':
+                print('Conditions:')
+                display(conditions)
+                print('\nRule-Condition Map:'),
+                print(map)
+                print('\nFacts:')
+                display(self.wm)
 
             # build rete alpha and beta node network from conditions
             self.net = self.init_net(conditions, actions, map)
@@ -81,6 +92,22 @@ class Rete():
     rule-conditionals mappings, and table of initial Working Memory Elements.
     """
     def parse(self, _rules, _facts):
+
+        # local function to parse strings into dictionaries
+        def str_to_dict(_str, _sender="unspecified"):
+            # attribut-value tuple
+            attval = OrderedDict()
+            keys = []
+            # remove any punctuation from string
+            temp_str = _str.translate(None, '()')
+            # for each attribute-value tuple split on ':' and make dict
+            for tup in temp_str.split():
+                att, val = tup.split(':')
+                if att not in keys: keys.append(att)
+                try: attval[att] = val
+                except: print("Syntax error in " + _sender + ": " + tup)
+            return attval, keys
+
         # read files
         _rules = open(_rules).read()
         _facts = open(_facts).read()
@@ -109,7 +136,7 @@ class Rete():
             temp_cond_map = []
             # convert plaintext conditions into dictionaries
             for cond in conditions_raw:
-                attvals, keys = self.str_to_dict(cond, 'condition')
+                attvals, keys = str_to_dict(cond, 'condition')
                 conditions.append(attvals)
                 [cond_cols.append(key) for key in keys if key not in cond_cols]
                 temp_cond_map.append(n_cond)
@@ -120,7 +147,7 @@ class Rete():
             temp_act_map = []
             # convert plaintext actions into dictionaries
             for act in actions_raw:
-                attvals, keys = self.str_to_dict(act, 'action')
+                attvals, keys = str_to_dict(act, 'action')
                 [act_cols.append(key) for key in keys if key not in act_cols]
                 temp_act_map.append(attvals)
 
@@ -132,7 +159,7 @@ class Rete():
         wmes = []
         fact_cols = []
         for wme in filter(None, _facts.split('\n')):
-            wme_dict, keys = self.str_to_dict(wme, 'condition')
+            wme_dict, keys = str_to_dict(wme, 'condition')
             [fact_cols.append(key) for key in keys if key not in fact_cols]
             wmes.append(wme_dict)
         wm = pd.DataFrame(wmes, columns=fact_cols)
@@ -217,24 +244,26 @@ class Rete():
         # initialize rete network (as dictionary) and populate with nodes
         rete_net = {}
         # create root node
-        root = rn.ReteNode(-1, 'root', None, [], self.wm, rn.ReteNode.root_match)
+        root = rn.ReteNode(-1, 'root', None, [], _match=rn.ReteNode.root_match)
         # push root node into rete net
         rete_net[-1] = root
         # create other nodes
         for node_id, prev in rete_nodes.iteritems():
             # alpha node connected to root
             if len(prev) == 1 and prev[0] == -1:
-                node = rn.ReteNode(node_id, 'alpha', prev, [], _pattern = _conditions.loc[node_id], _match=rn.ReteNode.alpha_match)
+                node = rn.ReteNode(node_id, 'alpha', prev, [], _pattern=_conditions.loc[node_id], _match=rn.ReteNode.alpha_match)
+                self.alpha_nodes.append(node_id)
             # rule node
             elif len(prev) == 1 and prev[0] != -1:
-                node = rn.ReteNode(node_id, 'rule', prev, None)
+                node = rn.ReteNode(node_id, 'rule', prev, None, _match=rn.ReteNode.alpha_match)
+                self.rule_nodes.append(node_id)
             # beta node
             else:
                 node = rn.ReteNode(node_id, 'beta', prev, [], _match=rn.ReteNode.beta_match)
+                self.beta_nodes.append(node_id)
 
-            # insert into our dict of nodes
+            # insert into our dictionary of nodes
             rete_net[node_id] = node
-
             # generate successor nodes
             for p in prev:
                 try:
@@ -257,17 +286,20 @@ class Rete():
         4. TERMINATE when WM is exhausted or when conflict resolution condition met
     """
     def main_loop(self):
-        # wme index counter: keeps count of wme index during adds
-        self.wm_index = len(self.wm.index)
 
         # initialize policy attributes
         self.saved_memory = [{'n_rule':[None], 'rule':None}]*self.threshold
-        self.refractor_table = [[] for _ in range(len(self.alpha_net))]
+        self.refractor_table = [[] for _ in range(len(self.rule_nodes))]
+
+        # initialize change tokens
+        tokens = {}
+        for wme in self.wm.index:
+            tokens[wme] = 'add'
 
         n_iter = 0
         while True:
             # start the matching process
-            conflict_set = self.match()
+            conflict_set = self.match(tokens)
 
             # choose a rule-wme pair from conflict set
             # if no rules are chosen, terminate
@@ -278,24 +310,41 @@ class Rete():
                 break
 
             # apply actions from chosen rule-wme pair
-            self.apply_action(chosen)
+            tokens = self.apply_action(chosen)
 
 
-    def str_to_dict(self, _str, _sender="unspecified"):
-        # attribut-value tuple
-        attval = OrderedDict()
-        keys = []
-        # remove any punctuation from string
-        temp_str = _str.translate(None, '()')
-        # for each attribute-value tuple split on ':' and make dict
-        for tup in temp_str.split():
-            att, val = tup.split(':')
-            if att not in keys: keys.append(att)
-            try: attval[att] = val
-            except: print("Syntax error in " + _sender + ": " + tup)
-        return attval, keys
+    """
+    Reads a dictionary of change tokens to determine which WMEs to attempt to match.
+    Initially, the entire WM is pushed inside and the node memories built.
+    """
+    def match(self, _tokens):
 
-    def match(self):
+        matches = []
+        for n_wme, action in _tokens.iteritems():
+            # propagate change tokens and match from root node down to rule nodes
+            wme = self.wm.loc[n_wme]
+
+            # apply tokens to root node
+            root_next = self.net[-1].apply_token(wme, action)
+
+            # apply tokens to alpha nodes
+            alpha_next = []
+            for node in root_next:
+                alpha_next.extend(self.net[node].apply_token(wme, action))
+            alpha_next = [node for node in alpha_next if node not in alpha_next]
+
+            # next apply tokens to beta nodes
+            while alpha_next:
+                node = alpha_next.pop()
+                try: alpha_next.extend(self.net[node].apply_token(wme, action))
+                except:
+                    if self.dbg == 'match': print(node)
+                    continue
+
+        self.net[-1].print_node()
+
+
+        """
         try:
             an = self.alpha_nodes.copy()
             an = [an.loc[n].dropna() for n in an.index]
@@ -357,6 +406,7 @@ class Rete():
                     partial_matches.append([])
             matches.append(partial_matches)
         self.matches = matches
+        """
 
     def alpha_match(self, _cond, _wm):
         cond = _cond.drop({'type', 'negate'})
