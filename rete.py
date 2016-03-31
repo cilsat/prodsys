@@ -62,7 +62,6 @@ class Rete():
         if rules and facts:
             # parse rules to obtain conditions to match and actions to perform
             conditions, actions, map, self.wm = self.parse(rules, facts)
-
             if self.dbg == 'cli':
                 print('conditions:')
                 print(conditions)
@@ -202,6 +201,9 @@ class Rete():
         # update alpha network: replace duplicate nodes with their first occurrence
         for n_rule, rule in enumerate(_map):
             _map[n_rule] = [equiv_table[n] if n in equiv_table.keys() else n for n in rule]
+        if self.dbg == 'cli':
+            print('\nrule-alpha map:'),
+            print(_map)
 
         # build beta network
         prev_nodes = []
@@ -244,22 +246,34 @@ class Rete():
         # initialize rete network (as dictionary) and populate with nodes
         rete_net = {}
         # create root node
-        root = rn.ReteNode(-1, 'root', None, [], _match=rn.ReteNode.root_match)
+        root = rn.ReteNode(-1, 'root', None, [], _function=rn.ReteNode.root_match)
         # push root node into rete net
         rete_net[-1] = root
         # create other nodes
         for node_id, prev in rete_nodes.iteritems():
             # alpha node connected to root
             if len(prev) == 1 and prev[0] == -1:
-                node = rn.ReteNode(node_id, 'alpha', prev, [], _pattern=_conditions.loc[node_id], _match=rn.ReteNode.alpha_match)
+                node = rn.ReteNode(node_id, 'alpha', prev, [], _pattern=_conditions.loc[node_id].dropna(), _function=rn.ReteNode.alpha_match)
                 self.alpha_nodes.append(node_id)
             # rule node
             elif len(prev) == 1 and prev[0] != -1:
-                node = rn.ReteNode(node_id, 'rule', prev, None, _match=rn.ReteNode.alpha_match)
+                node = rn.ReteNode(node_id, 'rule', prev, None, _function=rn.ReteNode.alpha_match)
                 self.rule_nodes.append(node_id)
             # beta node
             else:
-                node = rn.ReteNode(node_id, 'beta', prev, [], _match=rn.ReteNode.beta_match)
+                node = rn.ReteNode(node_id, 'beta', prev, [], _function=rn.ReteNode.beta_match)
+
+                # set depth of beta node
+                depth = 0
+                if node.prev[0] in self.beta_nodes:
+                    while True:
+                        try:
+                            depth += 1
+                            node.left[depth]
+                        except:
+                            break
+                node.depth = depth
+
                 self.beta_nodes.append(node_id)
 
             # insert into our dictionary of nodes
@@ -300,6 +314,7 @@ class Rete():
         while True:
             # start the matching process
             conflict_set = self.match(tokens)
+            break
 
             # choose a rule-wme pair from conflict set
             # if no rules are chosen, terminate
@@ -320,28 +335,52 @@ class Rete():
     def match(self, _tokens):
 
         matches = []
+        alpha_next = []
+        # apply tokens to all alpha nodes first
         for n_wme, action in _tokens.iteritems():
-            # propagate change tokens and match from root node down to rule nodes
             wme = self.wm.loc[n_wme]
 
             # apply tokens to root node
             root_next = self.net[-1].apply_token(wme, action)
 
             # apply tokens to alpha nodes
-            alpha_next = []
             for node in root_next:
-                alpha_next.extend(self.net[node].apply_token(wme, action))
-            alpha_next = [node for node in alpha_next if node not in alpha_next]
+                node_matches = self.net[node].apply_token(wme, action)
+                if len(node_matches) == 1 and node_matches[0] in self.rule_nodes:
+                    continue
+                alpha_next.extend(node_matches)
 
-            # next apply tokens to beta nodes
+        # revese alpha next so that we pop the first element in the list instead
+        alpha_next = sorted(set(alpha_next))[::-1]
+        print('alpha next:'),
+        print(alpha_next)
+        
+        # apply tokens to beta nodes
+        for n_wme, action in _tokens.iteritems():
             while alpha_next:
-                node = alpha_next.pop()
-                try: alpha_next.extend(self.net[node].apply_token(wme, action))
+                node = self.net[alpha_next.pop()]
+
+                # set the left and right sides of the beta node
+                beta_prev = node.prev
+                node.left = self.net[beta_prev[0]].memory
+                node.right = self.net[beta_prev[1]].memory
+                
+                # check if left and right hand sides are of the same type
+                if self.net[beta_prev[0]].type == 'alpha':
+                    diff_type = self.net[beta_prev[0]].pattern['type'] != self.net[beta_prev[1]].pattern['type']
+                else:
+                    diff_type = self.net[self.net[beta_prev[0]].prev[1]].pattern['type'] != self.net[beta_prev[1]].pattern['type']
+                node.diff_type = diff_type
+
+                # apply tokens
+                try: alpha_next.extend(node.apply_token(wme, action))
                 except:
                     if self.dbg == 'match': print(node)
                     continue
 
-        self.net[-1].print_node()
+        if self.dbg == 'cli':
+            print(self.beta_nodes)
+            for node in self.beta_nodes: self.net[node].print_node()
 
 
         """
